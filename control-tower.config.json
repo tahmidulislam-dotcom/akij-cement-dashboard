@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "name": "Deputy COO Control Tower",
+  "subtitle": "Akij Group — Multi-Plant Production & Maintenance Dashboard",
+  "version": "3.0.0",
+  "generated": "2026-08-29T05:13:00Z",
+  "description": "15-plant live dashboard with OEE, NPT, MTBF/MTTR, MOH Budget vs Today, AI analysis and Gmail reporting",
+  "deployment": {
+    "github": "https://github.com/tahmidulislam-dotcom/akij-dashboard",
+    "vercel": "https://akij-dashboard.vercel.app",
+    "vercelAliased": "https://akij-dashboard-8lgkuwxg7-jawad-704f.vercel.app",
+    "mcp": "https://akij-dashboard.vercel.app/api/mcp",
+    "local": {
+      "primary": "http://localhost:3212",
+      "legacy": "http://localhost:3210",
+      "health": "/api/health",
+      "data": "/api/data",
+      "live": "/api/live"
+    }
+  },
+  "plants": [
+    { "key": "accl", "name": "Akij Cement Company Ltd. (ACCL)", "bu": 4, "plants": ["ACCL Narayanganj"] },
+    { "key": "apfil", "name": "Akij Poly Fibre Industries Ltd.", "bu": 8, "plants": ["Narayangonj Plant"] },
+    { "key": "aafl", "name": "Akij Agro Feed Ltd.", "bu": 232, "plants": ["AAFML Narayangonj Factory"] },
+    { "key": "aelflour", "name": "Akij Essentials Ltd. - Flour Mills", "bu": 144, "plants": ["AEL Flour Narayanganj", "AEL Mohadevpur"] },
+    { "key": "aeldal", "name": "Akij Essentials Ltd. - Daal Mills", "bu": 144, "plants": ["AEL Dal Narayanganj"] },
+    { "key": "ail", "name": "Akij Ispat Limited", "bu": 224, "plants": ["Akij Ispat Munshiganj"] },
+    { "key": "absl", "name": "Akij Building Solutions Limited", "bu": 220, "plants": ["ABSL Ashuliya"] },
+    { "key": "armcl-ngnj", "name": "ARMCL Narayanganj", "bu": 175, "plants": ["ARMCL Narayanganj Plant"] },
+    { "key": "armcl-dhour", "name": "ARMCL Dhour", "bu": 175, "plants": ["ARMCL Dhour Plant"] },
+    { "key": "armcl-rup", "name": "ARMCL Rupganj", "bu": 175, "plants": ["ARMCL Rupganj Plant"] },
+    { "key": "armcl-ctg", "name": "ARMCL Chittagong", "bu": 175, "plants": ["ARMCL Chittagong Plant"] },
+    { "key": "armcl-gaz", "name": "ARMCL Gazipur", "bu": 175, "plants": ["ARMCL Gazipur Plant"] },
+    { "key": "hrml", "name": "Hashem Rice Mills Ltd.", "bu": 188, "plants": ["Hashem Rice Mills"] },
+    { "key": "fal", "name": "Fariq Agro Ltd. - Rice Mills", "bu": 189, "plants": ["Fariq Agro Ltd."] },
+    { "key": "alel", "name": "Akij Light Engineering Limited", "bu": 237, "plants": [] }
+  ],
+  "dataSources": {
+    "mssql_dwh": {
+      "server": "203.202.241.211",
+      "port": 1433,
+      "database": "DWH",
+      "user": "mcp_user",
+      "tables": {
+        "oee": "mes.tblOeeProdWasteHeaderArc",
+        "nptRow": "mes.tblNPTRowArc",
+        "nptHeader": "mes.tblNPTHeaderArc",
+        "planHeader": "mes.tblProductionPlanningHeaderArc",
+        "planRow": "mes.tblProductionPlanningRowArc",
+        "rca": "mes.tblRCAAPArc",
+        "productionRow": "mes.tblProductionRowArc",
+        "productionOrder": "mes.tblProductionOrderArc",
+        "overtime": "saas.timeEmpOverTimeArc"
+      },
+      "note": "Credentials via env MSSQL_* — never commit password. DWH firewalled: whitelist Vercel 76.76.19.0/24,76.223.126.0/24 and GitHub Actions meta CIDRs for cloud live, or use self-hosted runner"
+    },
+    "moh": {
+      "actual": "mes.tblProductionRowArc.numOverheadCost / mes.tblProductionOrderArc.dteStartDate (monthly + daily)",
+      "budget": "mes.tblMOHBudget / mes.tblProductionBudget / dbo.MOHBudget (fallback 108% of 6M avg if no budget table)",
+      "dailyBudget": "monthlyBudget / daysInMonth"
+    }
+  },
+  "api": {
+    "base": "",
+    "endpoints": {
+      "data": "GET /api/data?plant=<key> — full DATA or single plant, no-store, live from index.html or DWH",
+      "live": "GET /api/live?date=YYYY-MM-DD — today's OEE/MOH/NPT per plant (DWH live, cached 2min, fallback to Gist)",
+      "pushLive": "POST /api/push-live — office push to Vercel, header x-push-secret, updates /tmp + Gist akij-live.json",
+      "mcp": "GET /api/mcp?resource=meta|summary|plant&plantId= | POST JSON-RPC initialize/resources/list/tools/call",
+      "mohBudget": "GET /api/moh-budget?bu=<id>&month=YYYY-MM — embedded mohBudget or 108% avg",
+      "emails": "GET/POST /api/emails — max 5, persisted to /tmp/dashboard-config.json (ephemeral on Vercel) + local dashboard-config.json",
+      "send": "POST /api/send — Gmail via OAuth, body {to, subject, html}",
+      "health": "GET /api/health — dashboard, token, env check",
+      "analyze": "POST /api/analyze — DeepSeek if DEEPSEEK_API_KEY else offline built-in"
+    }
+  },
+  "live": {
+    "mode": "MCP always",
+    "initialFetch": "GET /api/data on DOMContentLoaded, replaces embedded __DATA_JSON__, badge ● LIVE MCP DATA",
+    "incremental": "GET /api/live every 5 min (visible tab) + manual ↻ Refresh Live button, merges today into DATA.plants[PLANT].daily/mohDaily",
+    "push": {
+      "from": "office dashboard-server-local.js every 5 min",
+      "to": "https://akij-dashboard.vercel.app/api/push-live → Gist f2ce2cd06bb735a2aa5db36532d1e0e6 (akij-live.json)",
+      "secretEnv": "PUSH_SECRET / LIVE_PUSH_SECRET",
+      "vercelReads": "api/live checks memory → /tmp → Gist (30min TTL) → DWH"
+    },
+    "rebuild": {
+      "githubActions": ".github/workflows/rebuild.yml (06:30 Dhaka, ubuntu-latest, graceful skip if DWH unreachable)",
+      "selfHosted": ".github/workflows/rebuild-selfhosted.yml (06:35 Dhaka, self-hosted Windows office-win-live)",
+      "setupScript": "setup-selfhosted-runner.ps1 — registers runner, keep dashboard-server-local.js as service via nssm"
+    }
+  },
+  "features": {
+    "kpis": ["Production OEE", "Capacity Utilization", "NPT", "Yield", "Planning Achievement", "MTBF", "MTTR", "MRO Downtime", "Overtime", "Scheduled Maintenance", "MOH Cost", "Good Output"],
+    "charts": ["chOee", "chNpt", "chCap", "chBd", "chPlan", "chRca", "chSpc", "chMt", "chOt", "chMro", "chSm", "chMoh", "chMohBudget"],
+    "extraPanel": "MOH Budget vs Actual — Today & MTD (Today Actual vs Daily Budget, MTD Actual vs MTD Budget, Monthly Budget, Remaining, daily+cumulative chart)",
+    "ai": "Built-in analyst engine + DeepSeek fallback, range 1-400 days",
+    "email": "Max 5 recipients, Save Addresses, Send Report via Gmail (OAuth refresh via GOOGLE_* env)"
+  },
+  "env": {
+    "required": ["MSSQL_SERVER", "MSSQL_PORT", "MSSQL_USER", "MSSQL_PASSWORD", "MSSQL_DATABASE"],
+    "optional": ["DEEPSEEK_API_KEY", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN", "GOOGLE_EMAIL", "PUSH_SECRET", "GIST_ID", "GITHUB_TOKEN"],
+    "vercel": ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN", "GOOGLE_EMAIL", "PUSH_SECRET", "GIST_ID", "GITHUB_TOKEN", "MSSQL_*"],
+    "githubSecrets": ["MSSQL_SERVER", "MSSQL_PORT", "MSSQL_USER", "MSSQL_PASSWORD", "MSSQL_DATABASE"]
+  },
+  "build": {
+    "script": "node build-dashboard.js",
+    "template": "dashboard-template.html",
+    "output": "index.html",
+    "localOutput": "C:/Users/jawad/OneDrive/Documents/Default Project/akij-cement-dashboard-local.html",
+    "command": "npm ci && node build-dashboard.js"
+  },
+  "security": {
+    "note": "Do not commit MSSQL_PASSWORD, GH token, or Gmail refresh token. Use Vercel encrypted env and GitHub Actions secrets. Gist f2ce2cd06bb735a2aa5db36532d1e0e6 is secret (unlisted).",
+    "tokenFile": "C:/Users/jawad/.google_workspace_mcp/credentials/tahmidulislam@akijresource.com.json"
+  }
+}

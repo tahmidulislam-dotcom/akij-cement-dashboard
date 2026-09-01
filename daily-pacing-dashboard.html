@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deputy COO Control Tower - Daily Pacing Dashboard</title>
+  <style>
+    body { 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+      max-width: 1200px; 
+      margin: 0 auto; 
+      padding: 20px; 
+      background: #f5f7fa;
+    }
+    h1 { 
+      color: #2c3e50; 
+      border-bottom: 2px solid #e0e0e0; 
+      padding-bottom: 10px; 
+      margin-bottom: 20px;
+    }
+    .dashboard { 
+      background: white; 
+      border-radius: 8px; 
+      padding: 25px; 
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+    .kpi-value { 
+      font-size: 24px; 
+      font-weight: bold; 
+      color: #2c3e50; 
+      margin: 8px 0;
+    }
+    .kpi-value.empty { 
+      color: #7f8c8d; 
+      font-style: italic;
+    }
+    .section-label { 
+      color: #7f8c8d; 
+      font-size: 13px; 
+      text-transform: uppercase; 
+      letter-spacing: 1px; 
+      margin-bottom: 15px; 
+      display: block;
+    }
+    .pace-percent { 
+      color: #e74c3c; 
+      font-weight: bold; 
+      margin-left: 10px;
+    }
+    .status-badge { 
+      display: inline-block; 
+      padding: 3px 8px; 
+      background: #e8e8e8; 
+      border-radius: 4px; 
+      font-size: 11px; 
+      text-transform: uppercase; 
+      letter-spacing: 1px;
+    }
+    table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      margin-top: 10px;
+    }
+    th, td { 
+      padding: 8px; 
+      text-align: left; 
+      border-bottom: 1px solid #eee;
+    }
+    th { 
+      background: #f8f9fa; 
+      font-size: 12px; 
+      color: #6c757d;
+    }
+    tr:last-child td { border-bottom: none; }
+    .breakdown-reason { 
+      font-family: monospace; 
+      font-size: 12px; 
+      color: #555;
+    }
+    .mitigation-plan { 
+      background: #f8f9fa; 
+      padding: 15px; 
+      border-radius: 4px; 
+      margin-top: 10px;
+    }
+    .override-notice { 
+      background: #fff3cd; 
+      border: 1px solid #ffe8cc; 
+      padding: 10px; 
+      border-radius: 4px; 
+      margin: 20px 0;
+      font-size: 12px;
+    }
+    .live-badge { 
+      background: #d4edda; 
+      color: #155724; 
+      padding: 3px 8px; 
+      border-radius: 4px; 
+      font-size: 11px; 
+      margin-left: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="dashboard">
+    <h1>Deputy COO Control Tower</h1>
+
+    <!-- Loading dropdown -->
+    <div style="margin-bottom: 20px;">
+      <span>Loading… ▾</span>
+    </div>
+
+    <div style="display: flex; gap: 20px; margin-bottom: 20px; align-items: baseline;">
+      <div>
+        <span>Month ▾</span>
+        <span>Date </span>
+      </div>
+      <div style="flex: 1;">
+        <!-- Refresh and Edit targets -->
+        <span>↻ Refresh</span>
+        <span>Edit targets [🤖 Alert Agent](/agent.html)</span>
+        ⇩ Save as HTML
+      </div>
+    </div>
+
+    <!-- OT amount savings -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">OT amount savings</span>
+      <div class="kpi-value empty">-</div>
+    </div>
+
+    <!-- Production actual (today) -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">Production actual (today)</span>
+      <div class="kpi-value empty">-</div>
+    </div>
+
+    <!-- Capacity utilization (today) -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">Capacity utilization (today)</span>
+      <div class="kpi-value empty">-</div>
+    </div>
+
+    <!-- OEE actual (today) -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">OEE actual (today)</span>
+      <div class="kpi-value empty">-</div>
+    </div>
+
+    <!-- Overtime hours (today) -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">Overtime hours (today)</span>
+      <div class="kpi-value empty">-</div>
+    </div>
+
+    <!-- Wastage (to-date avg) -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">Wastage (to-date avg)</span>
+      <div class="kpi-value empty">-</div>
+    </div>
+
+    <!-- Pace % by KPI -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">Pace % by KPI</span>
+      <span>100% line = on target for today</span>
+    </div>
+
+    <!-- Production Budget — cumulative trend -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">Production Budget — cumulative trend</span>
+      <span>Actual vs. expected pace, day by day</span>
+    </div>
+
+    <!-- KPI Pacing -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">KPI Pacing</span>
+      <span>Expected-to-date = target × day-elapsed ratio</span>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>KPI</th>
+          <th>Monthly TGT</th>
+          <th>Today's target</th>
+          <th>Today's actual</th>
+          <th>To-date actual</th>
+          <th>Expected to-date</th>
+          <th>Pace</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Production</td>
+          <td style="width: 120px;">-</td>
+          <td style="width: 120px;">-</td>
+          <td style="width: 120px;">-</td>
+          <td style="width: 120px;">-</td>
+          <td style="width: 120px;">-</td>
+          <td style="width: 80px;">-</td>
+          <td>-</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- 💾 Override (local) -->
+    <div style="background: #fff8e1; border: 1px solid #ffe8c5; padding: 12px; border-radius: 4px; margin: 20px 0;">
+      <span class="section-label">💾 Override (local)</span>
+    </div>
+
+    <!-- Daily Comments -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">Daily Comments</span>
+    </div>
+
+    <!-- NPT & Breakdown Analysis -->
+    <div style="margin-bottom: 15px;">
+      <span class="section-label">NPT & Breakdown Analysis</span>
+    </div>
+
+    <div style="margin-bottom: 10px;">
+      <span class="section-label">Today's NPT</span>
+      <div class="kpi-value empty">-</div>
+    </div>
+
+    <div>
+      <span class="section-label">Top 5 breakdown reasons by downtime</span>
+    </div>
+    <pre class="breakdown-reason"># Breakdown Name   Reason   Downtime</pre>
+
+    <div style="margin-top: 10px;">
+      <span class="section-label">Month-to-date breakdown summary</span>
+    </div>
+    <div class="kpi-value empty">-</div>
+
+    <!-- Mitigation Plan -->
+    <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee;">
+      <span class="section-label">Mitigation Plan</span>
+      <div style="margin-top: 10px; font-size: 13px;">
+        Specific next steps for anything not on pace, ranked by priority
+      </div>
+    </div>
+
+    <!-- Machine Plan vs Actual -->
+    <div style="margin-top: 20px;">
+      <span class="section-label">Machine Plan vs Actual</span>
+      <span>Monthly planned vs actual output per machine (DWH)</span>
+    </div>
+
+    <table style="margin-top: 10px;">
+      <thead>
+        <tr>
+          <th>Machine</th>
+          <th>Planned Qty</th>
+          <th>Actual Qty</th>
+          <th>Variance</th>
+          <th>Achievement</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>-</td>
+          <td style="width: 120px;">-</td>
+          <td style="width: 120px;">-</td>
+          <td style="width: 100px;">-</td>
+          <td>-</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Scheduled Maintenance Plan vs Actual -->
+    <div style="margin-top: 20px;">
+      <span class="section-label">Scheduled Maintenance Plan vs Actual</span>
+      <maintenance actions — scheduled vs completed (DWH)</maintenance>
+    </div>
+
+    <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+      <thead>
+        <tr style="background: #f8f9fa;">
+          <th style="padding: 8px; border: 1px solid #ddd;">Maintenance Action</th>
+          <th style="padding: 8px; border: 1px solid #ddd;">Scheduled</th>
+          <th style="padding: 8px; border: 1px solid #ddd;">Actual</th>
+          <th style="padding: 8px; border: 1px solid #ddd;">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding: 8px; border: 1px solid #ddd;">-</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">-</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">-</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">-</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Kaizen Section (added to match "update the dashboard same to look like this") -->
+    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
+      <h3>🥇 Kaizen Improvement</h3>
+      
+      <div style="margin-bottom: 15px;">
+        <span class="section-label">Kaizen Improvement Cards (acl_improvement_cards)</span>
+        <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+          <span>Total Kaizen Created: <span class="kpi-value empty">0</span></span>
+          <span>This Month: <span class="kpi-value empty">0</span></span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+          <span>Today's Kaizen: <span class="kpi-value today">0</span></span>
+          <span>Pace %: <span class="pace-percent">0%</span></span>
+        </div>
+      </div>
+
+      <div style="margin-bottom: 15px;">
+        <span class="section-label">Kaizen Cost Savings (accl_cost_savings)</span>
+        <div style="display: flex; justify-content: space-between;">
+          <span>Total Savings: $<span class="kpi-value empty">0</span></span>
+          <span>Avg per Kaizen: $<span class="kpi-value empty">0</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- QCP Audit -->
+    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+      <h3>🔍 QCP Audit (qcp_audit)</h3>
+      <div style="display: flex; justify-content: space-between; margin-top: 10px;">
+        <span>Total QCP Audits: <span class="kpi-value empty">0</span></span>
+        <span>Pass Rate: <span class="pace-percent">0%</span></span>
+      </div>
+    </div>
+
+    <!-- 5S Audit -->
+    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+      <h3>🧹 5S Audit Entries (accl_5s_audit_entries)</h3>
+      <div style="display: flex; justify-content: space-between; margin-top: 10px;">
+        <span>Avg 5S Score: <span class="kpi-value empty">0</span></span>
+        <span>Compliance: <span class="pace-percent">0%</span></span>
+      </div>
+    </div>
+
+    <!-- Training -->
+    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+      <h3>👨‍🏫 Training Provided (accl_training_provided)</h3>
+      <div style="display: flex; justify-content: space-between; margin-top: 10px;">
+        <span>Total Records: <span class="kpi-value empty">0</span></span>
+        <span>Completion: <span class="pace-percent">0%</span></span>
+      </div>
+    </div>
+
+    <!-- Projects -->
+    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+      <h3>📁 Improvement Projects (accl_projects)</h3>
+      <div style="display: flex; justify-content: space-between; margin-top: 10px;">
+        <span>Active Projects: <span class="kpi-value empty">0</span></span>
+        <span>On-Track: <span class="kpi-value today">0</span></span>
+      </div>
+    </div>
+
+    <!-- Data Source Status -->
+    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #6c757d; font-size: 12px;">
+      Live from DWH + Supabase via the dashboard API · data refreshes on page load · open in any browser
+      <span class="live-badge">Live</span>
+    </div>
+  </div>
+
+</body>
+</html>

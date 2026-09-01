@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.vercel/
+logs/
+*.log
+.DS_Store
+Thumbs.db
+.credentials/
+credentials/
+*.local.json

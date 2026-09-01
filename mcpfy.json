@@ -1,0 +1,13 @@
+{
+  "name": "akij-resource-opex-dashboard",
+  "version": "2.0.0",
+  "description": "Shareable MCP endpoint for Akij Resource OPEX dashboard data",
+  "transport": "streamable-http",
+  "url": "https://akij-dashboard-deploy.vercel.app/api/mcp",
+  "public": true,
+  "resources": ["dashboard://summary", "dashboard://reliability"],
+  "share_config": {
+    "type": "remote",
+    "url": "https://akij-dashboard-deploy.vercel.app/api/mcp"
+  }
+}

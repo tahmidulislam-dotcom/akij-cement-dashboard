@@ -1,0 +1,13 @@
+{
+  "cleanUrls": true,
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 60
+    }
+  },
+  "routes": [
+    { "src": "/mcpfy.json", "dest": "/mcpfy.json" },
+    { "src": "/api/(.*)", "dest": "/api/$1" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
+}
