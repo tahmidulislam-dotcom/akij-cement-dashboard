@@ -10,3 +10,5 @@ Thumbs.db
 .credentials/
 credentials/
 *.local.json
+
+.vercel
