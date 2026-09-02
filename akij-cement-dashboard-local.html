@@ -719,6 +719,7 @@ function render(){
   const tCap=kpiTarget('CapacityUtilization', tYm);
   const tYld=kpiTarget('Yield', tYm);
   const tProd=kpiTarget('Production', tYm);
+  const tProdDay = tProd!=null ? tProd/30 : null;   // monthly production target -> per-day (÷30)
   const tgtFmt=(v,isPct)=>(v==null?'—':(isPct?v+'%':fmt(v,0)));
   const tgtSub = (v,isPct)=> (v==null?'':` · <b style="color:var(--pink)">Tgt ${tgtFmt(v,isPct)}</b>`);
   const tgtLine = (v,isPct)=> (v==null?'':`<span style="display:block;margin-top:6px;color:var(--pink);font-weight:800;font-size:12px;letter-spacing:.3px">🎯 Target Yield ${tgtFmt(v,isPct)}</span>`);
@@ -732,7 +733,7 @@ function render(){
     {l:'Overtime', v:fmt(otH,0)+' h', s:`${fmt(otE,0)} OT entries`, ac:'var(--amber)'},
     {l:'Scheduled Maintenance', v:fmt(smMin/60,0)+' h', s:`${smEvt} planned events`, ac:'var(--blue)'},
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},
-    {l:'Good Output', v:uSt[0]?fmt(uSt[0].q,0):'—', s:(uSt[0]?`${uSt[0].u}${uSt[1]?` · ${fmt(uSt[1].q,0)} ${uSt[1].u}`:''}`:'No output in range')+tgtSub(tProd,false), ac:'var(--teal)'},
+    {l:'Good Output', v:uSt[0]?fmt(uSt[0].q,0):'—', s:(uSt[0]?`${uSt[0].u}${uSt[1]?` · ${fmt(uSt[1].q,0)} ${uSt[1].u}`:''}`:'No output in range')+(tProdDay!=null?`<div style="margin-top:5px;color:var(--pink);font-weight:700">Target ${fmt(tProdDay,0)}/day</div>`:''), ac:'var(--teal)'},
   ];
   $('kpiGrid').innerHTML = kpis.map(k=>`<div class="kpi" style="--ac:${k.ac}"><div class="lbl">${k.l}</div><div class="val">${k.v}</div><div class="sub">${k.s||''}</div></div>`).join('');
 
