@@ -406,7 +406,10 @@ function setPlant(key){
   const maxAllowed = dhakaToday > P.meta.maxDate ? dhakaToday : P.meta.maxDate;
   ['fromDate','toDate','aiFrom','aiTo'].forEach(id=>{ $(id).min=P.meta.minDate; $(id).max=maxAllowed; });
   $('fromDate').value=P.meta.minDate; $('toDate').value=P.meta.maxDate;
-  FROM=P.meta.minDate; TO=P.meta.maxDate;
+  // Default view: today (or latest available date if today not yet in data) — show today's value on open
+  let dflt = (dhakaToday <= P.meta.maxDate) ? dhakaToday : P.meta.maxDate;
+  $('fromDate').value=dflt; $('toDate').value=dflt;
+  FROM=dflt; TO=dflt;
   // show banner if today > maxDate (ETL pending)
   const banner=$('todayBanner');
   if(banner){
