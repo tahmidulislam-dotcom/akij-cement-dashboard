@@ -5,14 +5,14 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const sql = require('mssql');
-const prodReport = require('./prod-report.js');
-const targets = require('./target.js');
-const loomReport = require('./loom-report.js');
+const alertEngine = require('./alert-engine.js');
 
 const PORT = 3212;
 const DIR = __dirname;
 const DASH = path.join(DIR, 'akij-cement-dashboard-local.html');
 const CFG = path.join(DIR, 'dashboard-config.json');
+const ALERT_CFG = path.join(DIR, 'alert-config.json');
+const ALERT_STATE = path.join(DIR, 'alert-state.json');
 const TOKEN_FILE = path.join(process.env.USERPROFILE || '', '.google_workspace_mcp', 'credentials', (process.env.GOOGLE_EMAIL || 'tahmidulislam@akijresource.com') + '.json');
 
 /* ---------- helpers ---------- */
@@ -22,6 +22,12 @@ const loadCfg = () => { try { return JSON.parse(fs.readFileSync(CFG, 'utf8')); }
 const saveCfg = c => fs.writeFileSync(CFG, JSON.stringify(c, null, 2));
 const sanitize = h => String(h).replace(/<script[\s\S]*?<\/script>/gi, '').replace(/ on\w+="[^"]*"/gi, '').replace(/javascript:/gi, '');
 const validEmail = e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+
+/* ---------- Alert email config + daily escalation state ---------- */
+const loadAlertCfg = () => { try { return JSON.parse(fs.readFileSync(ALERT_CFG, 'utf8')); } catch { return JSON.parse(JSON.stringify(alertEngine.defaultConfig)); } };
+const saveAlertCfg = c => fs.writeFileSync(ALERT_CFG, JSON.stringify(c, null, 2));
+const loadAlertState = () => { try { return JSON.parse(fs.readFileSync(ALERT_STATE, 'utf8')); } catch { return { date: '', counts: {} }; } };
+const saveAlertState = s => fs.writeFileSync(ALERT_STATE, JSON.stringify(s, null, 2));
 
 /* ---------- MSSQL for MOH budget/today live fetch ---------- */
 const mssqlConfig = {
@@ -96,7 +102,7 @@ Structure with <h3> headings and use a <table> for the key-metrics table (styled
 2. Key Metrics vs Previous Period (table: Metric | Value | Change | Assessment)
 3. OEE & Capacity Commentary (note: runtime capture started 2025-10-08; explain '—' values as data unavailability, never as bad performance)
 4. Losses & Breakdown Analysis (top breakdowns with hrs/events, NPT categories, call out worst offenders)
-5. Maintenance Effectiveness (MTBF, MTTR, MRO vs scheduled maintenance ratio, RCA status)
+5. Maintenance Effectiveness (scheduled maintenance, RCA status)
 6. Planning & Output (plan achievement, bag/bulk output, SPC stability if given)
 7. Recommendations (numbered, specific, actionable — reference the actual numbers)
 Use ৳ for BDT amounts, thousands separators, % for percentages. Be honest about data gaps. Keep total under 900 words.`;
@@ -137,6 +143,41 @@ const server = http.createServer(async (req, res) => {
       if (new Set(list).size !== list.length) return json(res, 400, { error: 'Duplicate addresses' });
       const cfg = loadCfg(); cfg.emails = list; saveCfg(cfg);
       return json(res, 200, { ok: true, count: list.length, emails: list });
+    }
+    if (url.pathname === '/api/alert-emails' && req.method === 'GET') {
+      const cfg = loadAlertCfg();
+      const state = loadAlertState();
+      return json(res, 200, { config: cfg, state, deputy: cfg._deputy || 'deputy.coo@akijresource.com' });
+    }
+    if (url.pathname === '/api/alert-emails' && req.method === 'POST') {
+      const b = await readBody(req);
+      const cfg = loadAlertCfg();
+      const sanitizeList = a => Array.isArray(a) ? a.map(e => String(e).trim().toLowerCase()).filter(validEmail) : [];
+      if (b.config) {
+        for (const [k, v] of Object.entries(b.config)) {
+          if (k === '_deputy') { cfg._deputy = sanitizeList([v])[0] || v || 'deputy.coo@akijresource.com'; continue; }
+          cfg[k] = cfg[k] || {};
+          if (v) { if (v.name) cfg[k].name = v.name; if (v.plant_head) cfg[k].plant_head = sanitizeList(v.plant_head); if (v.hob_ceo) cfg[k].hob_ceo = sanitizeList(v.hob_ceo); }
+        }
+      }
+      saveAlertCfg(cfg);
+      return json(res, 200, { ok: true, config: cfg });
+    }
+    if (url.pathname === '/api/alert-check' && req.method === 'POST') {
+      try {
+        // Rebuild live DATA (same path as /api/data?live=1) then evaluate + escalate
+        const html = fs.readFileSync(DASH, 'utf8');
+        const m = html.match(/(?:const|let) DATA = (\{[\s\S]*?\});\s*\n?\s*(?:const |let |function |document\.)/);
+        let live = m ? JSON.parse(m[1]) : { plants:{}, order:[] };
+        // reuse the /api/data live-merge by fetching our own endpoint
+        const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
+        if (r.ok) { const j = await r.json(); if (j && j.plants) live = j; }
+        const cfg = loadAlertCfg();
+        const state = loadAlertState();
+        const reslt = await alertEngine.evaluateAll(live, cfg, state, async (to, subject, htmlBody) => { return await gmailSend(to, subject, htmlBody); });
+        saveAlertState(reslt.state);
+        return json(res, 200, reslt);
+      } catch (e) { return json(res, 500, { error: e.message }); }
     }
     if (url.pathname === '/api/analyze' && req.method === 'POST') {
       const b = await readBody(req);
@@ -209,6 +250,9 @@ const server = http.createServer(async (req, res) => {
         if(!m) return json(res,500,{error:"DATA not found in dashboard"});
         live=JSON.parse(m[1]);
       }catch(e){ return json(res,500,{error:e.message}); }
+      const PLANTS_LIVE=[
+        {key:'accl', bu:4, plants:['ACCL Narayanganj']},{key:'apfil', bu:8, plants:['Narayangonj Plant']},{key:'aafl', bu:232, plants:['AAFML Narayangonj Factory']},{key:'aelflour', bu:144, plants:['AEL Flour Narayanganj','AEL Mohadevpur']},{key:'aeldal', bu:144, plants:['AEL Dal Narayanganj']},{key:'ail', bu:224, plants:['Akij Ispat Munshiganj']},{key:'absl', bu:220, plants:['ABSL Ashuliya']},{key:'armcl-ngnj', bu:175, plants:['ARMCL Narayanganj Plant']},{key:'armcl-dhour', bu:175, plants:['ARMCL Dhour Plant']},{key:'armcl-rup', bu:175, plants:['ARMCL Rupgonj Plant']},{key:'armcl-ctg', bu:175, plants:['ARMCL Chittagong Plant']},{key:'armcl-gaz', bu:175, plants:['ARMCL Gazipur Plant']},{key:'hrml', bu:188, plants:['Hashem Rice Mills']},{key:'fal', bu:189, plants:['Fariq Agro Ltd.']},{key:'alel', bu:237, plants:[]},
+      ];
       // MOH Actual — connected live to Finance sub-schedule (fin.tblAccountingJournal, GL 4010001 Manufacturing Expenses, per Profit Center, deduped)
       const MOH_PCTER_MAP = {
         accl:        { bu:4,   pcs:['Akij Cement Company Ltd.'],                                   name:'Akij Cement Company Ltd.' },
@@ -280,6 +324,39 @@ const server = http.createServer(async (req, res) => {
           }catch(e){ console.error('MOH fetch fail '+key+':', e.message); }
         }
       };
+      // Production targets from bgt.tblBudgetProduction (iBOSDD via MCP proxy), per BU per month, matched to plant output UoM
+      const applyProdTargets = async () => {
+        try{
+          const q = async (sql) => {
+            const pr=await fetch(`http://localhost:${PORT}/api/proxy?domain=mes&method=tools/call&tool=ExecuteReadOnlyQueryAsync&args=${encodeURIComponent(JSON.stringify({sqlQuery: sql, limit: 3000}))}`);
+            const pj=await pr.json(); const md=(pj?.result?.result?.content?.[0]?.text)||'';
+            const rows=[]; let hd=[];
+            md.split('\n').forEach(line=>{ if(line.includes('---')||!line.includes('|'))return; const c=line.split('|').map(x=>x.trim()); if(c[0]==='')c.shift(); if(c[c.length-1]==='')c.pop(); if(!c.length)return; if(!hd.length){hd=c;return;} if(c.length>=hd.length){const o={}; hd.forEach((h,i)=>o[h]=c[i]); rows.push(o);} });
+            return rows;
+          };
+          const uom=await q(`SELECT intUOMId, strUomName FROM itm.tblUnitOfMeasurement`);
+          const uomName={}; uom.forEach(x=>uomName[x.intUOMId]=(x.strUomName||'').trim());
+          const normU=n=>String(n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+          for(const P of PLANTS_LIVE){
+            const target=live.plants?.[P.key]; if(!target) continue;
+            const uCount={};(target.daily||[]).forEach(d=>{const k=normU(d.u); uCount[k]=(uCount[k]||0)+d.g;});
+            const dom=Object.entries(uCount).sort((a,b)=>b[1]-a[1]).slice(0,3).map(x=>x[0]);
+            if(!dom.length) continue;
+            const mf = {accl:`strMachineName IN ('VRM-1','VRM-2')`, apfil:`strMachineName LIKE 'Loom%'`, ail:`strMachineName IN ('Roughing Mill')`}[P.key]||'';
+            const rows=await q(`SELECT CONVERT(varchar(10), dteProductionDate,23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numCapacityPerHr,0)*ISNULL(numAvailableMinute,0)/60.0) tgt FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} ${mf?` AND ${mf}`:''} GROUP BY CONVERT(varchar(10), dteProductionDate,23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`);
+            if(!rows.length) continue;
+            target.capTarget=target.capTarget||[];
+            const ck=new Map(target.capTarget.map(x=>[x.d+'|'+x.u,x]));
+            rows.forEach(r=>{ ck.set(r.d+'|'+normU(r.u), {d:r.d,u:normU(r.u),target:parseFloat(String(r.tgt||'').replace(/,/g,''||0))}); });
+            target.capTarget=[...ck.values()].sort((a,b)=>a.d<b.d?-1:1);
+            // Waste + waste target (iBOSDD) per date
+            try{
+              const wRows=await q(`SELECT CONVERT(varchar(10), h.dteProductionDate,23) d, LTRIM(RTRIM(h.strUOMName)) u, SUM(ISNULL(h.numWastageTargetQuantity,0)) tgt, SUM(ISNULL(wr.numWasteQuantity,0)) w FROM mes.tblOeeProdWasteHeader h LEFT JOIN mes.tblOeeProdWasteRow wr ON wr.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.dteProductionDate >= '2026-08-01' GROUP BY CONVERT(varchar(10), h.dteProductionDate,23), LTRIM(RTRIM(h.strUOMName))`);
+              if(wRows.length){ target.waste=target.waste||[]; const wk=new Map(target.waste.map(x=>[x.d+'|'+x.u,x])); wRows.forEach(r=>{ const row={d:r.d,u:(r.u||'').replace(/\s+/g,''),waste:parseFloat(String(r.w||'0').replace(/,/g,''))||0,target:parseFloat(String(r.tgt||'0').replace(/,/g,''))||0}; wk.set(row.d+'|'+row.u,row); }); target.waste=[...wk.values()].sort((a,b)=>a.d<b.d?-1:1); }
+            }catch(e){}
+          }
+        }catch(e){ console.error('prodTarget failed', e.message); }
+      };
       // Merge latest available live date into the snapshot so maxDate/daily are current
       if(mergeLive){
         try{
@@ -290,10 +367,8 @@ const server = http.createServer(async (req, res) => {
           const latestDate=(mx[0]&&mx[0].mx);
           const baseMax=live.plants?.[live.order?.[0]]?.meta?.maxDate;
           await applyMOHFromTable();
+          await applyProdTargets();
           if(latestDate && (!baseMax || latestDate > baseMax)){
-            const PLANTS_LIVE=[
-              {key:'accl', bu:4, plants:['ACCL Narayanganj']},{key:'apfil', bu:8, plants:['Narayangonj Plant']},{key:'aafl', bu:232, plants:['AAFML Narayangonj Factory']},{key:'aelflour', bu:144, plants:['AEL Flour Narayanganj','AEL Mohadevpur']},{key:'aeldal', bu:144, plants:['AEL Dal Narayanganj']},{key:'ail', bu:224, plants:['Akij Ispat Munshiganj']},{key:'absl', bu:220, plants:['ABSL Ashuliya']},{key:'armcl-ngnj', bu:175, plants:['ARMCL Narayanganj Plant']},{key:'armcl-dhour', bu:175, plants:['ARMCL Dhour Plant']},          {key:'armcl-rup', bu:175, plants:['ARMCL Rupgonj Plant']},{key:'armcl-ctg', bu:175, plants:['ARMCL Chittagong Plant']},{key:'armcl-gaz', bu:175, plants:['ARMCL Gazipur Plant']},{key:'hrml', bu:188, plants:['Hashem Rice Mills']},{key:'fal', bu:189, plants:['Fariq Agro Ltd.']},{key:'alel', bu:237, plants:[]},
-            ];
             const esc=s=>s.replace(/'/g,"''");
             const norm=alias=>`LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(${alias}, CHAR(9), ''), CHAR(10), ''), CHAR(13), '')))`;
             const plantIn=(p,alias)=> p.plants.length ? `${norm(alias||'strPlantName')} IN (${p.plants.map(x=>`'${esc(x)}'`).join(',')})` : '1=0';
@@ -543,33 +618,6 @@ const server = http.createServer(async (req, res) => {
         return json(res,200,out);
       }catch(e){ return json(res,200,{date: new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'}), generated: new Date().toISOString(), error: e.message, fallback:true, plants:{}}); }
     }
-    if (url.pathname === '/api/prod-report' && req.method === 'GET') {
-      try{
-        const plant = url.searchParams.get('plant');               // optional filter, e.g. 'ail'
-        const data = await prodReport.buildAll();
-        if (plant) return json(res,200,{ generated:data.generated, plant: data.plants[plant] || null });
-        res.setHeader('Cache-Control','no-store');
-        return json(res,200,data);
-      }catch(e){ return json(res,500,{ error: e.message }); }
-    }
-    if (url.pathname === '/api/targets' && req.method === 'GET') {
-      try{
-        const sbu = url.searchParams.get('sbu');
-        const data = await targets.fetchTargets();
-        if (sbu) return json(res,200,{ generated:data.generated, sbu, months: data.bySbu[sbu] || {} });
-        res.setHeader('Cache-Control','no-store');
-        return json(res,200,data);
-      }catch(e){ return json(res,500,{ error: e.message }); }
-    }
-    if (url.pathname === '/api/loom-report' && req.method === 'GET') {
-      try{
-        const unit = url.searchParams.get('unit');          // 'loom1' or 'loom2'
-        const data = await loomReport.buildAll();
-        if (unit) return json(res,200,{ generated:data.generated, plant: data.plants[unit] || null });
-        res.setHeader('Cache-Control','no-store');
-        return json(res,200,data);
-      }catch(e){ return json(res,500,{ error: e.message }); }
-    }
     if (url.pathname === '/api/proxy' && (req.method === 'GET' || req.method === 'POST')) {
       const MCP_URL = process.env.ARL_MCP_URL || "https://arl-mcp.ibos.io/mcp";
       const CONFIG = {
@@ -625,3 +673,26 @@ async function pushLiveToVercel(){
 }
 setTimeout(pushLiveToVercel, 12*1000);
 setInterval(pushLiveToVercel, 5*60*1000);
+
+/* ---------- Escalation email alert job — daily at 22:00 Dhaka ---------- */
+async function runAlertJob(){
+  try{
+    const dhakaNow = new Date().toLocaleString('en-US',{timeZone:'Asia/Dhaka'});
+    console.log('alert job run', dhakaNow);
+    const r = await fetch(`http://localhost:${PORT}/api/alert-check`, { method:'POST' });
+    const j = await r.json();
+    console.log('alert job result:', JSON.stringify(j.error || { sent: (j.sent||[]).length, alerts: (j.sent||[]).map(s=>s.key) }));
+  }catch(e){ console.error('alert job failed', e.message); }
+}
+function scheduleNextAlert(){
+  const now = new Date();
+  // Dhaka = UTC+6 ; compute current Dhaka hour
+  const dhaka = new Date(now.getTime() + (6*60 - now.getTimezoneOffset())*60000);
+  const next = new Date(dhaka);
+  next.setHours(22, 2, 0, 0);           // 22:02 Dhaka (small buffer)
+  if (next <= dhaka) next.setDate(next.getDate()+1);
+  const ms = next - dhaka;
+  setTimeout(()=>{ runAlertJob(); scheduleNextAlert(); }, ms);
+  console.log(`Alerts scheduled at ${next.toLocaleString('en-US',{timeZone:'Asia/Dhaka'})} (in ${Math.round(ms/60000)} min)`);
+}
+scheduleNextAlert();

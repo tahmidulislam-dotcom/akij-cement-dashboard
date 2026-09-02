@@ -11,6 +11,14 @@ const norm = alias => `LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(${alias}, CHAR(9), ''
 const plantIn = (p, alias) => p.plants.length ? `${norm(alias||'strPlantName')} IN (${p.plants.map(x=>`'${esc(x)}'`).join(',')})` : '1=0';
 const num = s => { const n = parseFloat(String(s||'').replace(/,/g,'')); return isNaN(n) ? 0 : n; };
 
+// Machine filter for the Good-Output capacity target (Σ Cap/hr × AvailMin/60):
+//   ACCL->VRM, APFIL->Loom, AIL->Rolling, others->general (all machines)
+const MACHINE_FILTER = {
+  accl:  `strMachineName IN ('VRM-1','VRM-2')`,
+  apfil: `strMachineName LIKE 'Loom%'`,
+  ail:   `strMachineName IN ('Roughing Mill')`,
+};
+
 // Per-SBU Manufacturing Overhead: Profit Centers (exact iBOSDD names), Income-Statement rows only (deduped)
 const MOH_PCTER = {
   accl:         { bu:4,   pcs:['Akij Cement Company Ltd.'] },
@@ -75,6 +83,33 @@ async function injectMOH(live) {
   return live;
 }
 
+// Production targets from bgt.tblBudgetProduction (per BU per month).
+// Capture the budget quantity in the UoMs that match the plant's dominant output UoM(s)
+// (Bag, Ton, Pecs/Pieces, Meter/Metre, MetricTons, CubicFoot, ...), so the target shows in the plant's own unit.
+// Good-Output per-day target = Σ(Cap/hr × AvailMin/60), weight UoMs only (from mes.tblOeeProdWasteHeader).
+// Stored per date + UoM, so the dashboard can sum over any selected range.
+async function injectProductTargets(live) {
+  try {
+    const normU = n => String(n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    for (const P of PLANTS) {
+      const t = live.plants?.[P.key]; if (!t) continue;
+      const uCount = {};
+      (t.daily||[]).forEach(d=>{ const k=normU(d.u); uCount[k]=(uCount[k]||0)+d.g; });
+      const dom = Object.entries(uCount).sort((a,b)=>b[1]-a[1]).slice(0,3).map(x=>x[0]);
+      if(!dom.length) continue;
+      if(!dom.some(d=>/ton|kg|kilogram|mt/.test(d))) continue;   // no weight output
+      const rows = await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+        `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numCapacityPerHr,0)*ISNULL(numAvailableMinute,0)/60.0) tgt FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} ${MACHINE_FILTER[P.key]?` AND ${MACHINE_FILTER[P.key]}`:''} GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000});
+      if(!rows.length) continue;
+      t.capTarget = t.capTarget || [];
+      const ck = new Map(t.capTarget.map(x=>[x.d+'|'+x.u, x]));
+      rows.forEach(r=>{ ck.set(r.d+'|'+normU(r.u), {d:r.d, u:normU(r.u), target:num(r.tgt)}); });
+      t.capTarget = [...ck.values()].sort((a,b)=>a.d<b.d?-1:1);
+    }
+  } catch(e) { /* skip */ }
+  return live;
+}
+
 async function mergeLive(live) {
   const today = new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Dhaka' });
   let latest = null;
@@ -101,6 +136,41 @@ async function mergeLive(live) {
       if (realMax > (t.meta.maxDate||'0000-00-00')) t.meta.maxDate = realMax;
       const yr = realMax.slice(0,4); t.meta.years = t.meta.years||[]; if (!t.meta.years.includes(yr)) t.meta.years.push(yr);
     }
+
+    // NPT categories + breakdowns from mes.tblNPTHeader/Row (iBOSDD)
+    try {
+      const nptMax = (t.nptCat && t.nptCat.length) ? t.nptCat[t.nptCat.length-1].d : snapMax;
+      const nptRows = await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+        `SELECT CONVERT(varchar(10), h.dteLossTimeDate,23) d, LTRIM(RTRIM(ISNULL(r.strCategoryName,'Others'))) c, SUM(ISNULL(r.intLossTimeInMinutes,0)) m, COUNT(*) e FROM mes.tblNPTRow r JOIN mes.tblNPTHeader h ON h.intNPTId=r.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND r.isActive=1 AND ${plantIn(P,'h.strPlantName')} AND h.dteLossTimeDate > '${nptMax}' AND h.dteLossTimeDate <= '${today}' GROUP BY CONVERT(varchar(10), h.dteLossTimeDate,23), LTRIM(RTRIM(ISNULL(r.strCategoryName,'Others')))`, limit:2000});
+      if (nptRows.length) {
+        t.nptCat = t.nptCat||[];
+        const nk = new Map(t.nptCat.map(x=>[x.d+'|'+x.c, x]));
+        nptRows.forEach(r=>{ const row={d:r.d, c:r.c, m:Math.round(num(r.m)), e:+r.e}; nk.set(row.d+'|'+row.c, row); });
+        t.nptCat = [...nk.values()].sort((a,b)=>a.d<b.d?-1:1);
+      }
+      const bdMax = (t.nptBd && t.nptBd.length) ? t.nptBd[t.nptBd.length-1].d : snapMax;
+      const bdRows = await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+        `SELECT CONVERT(varchar(10), h.dteLossTimeDate,23) d, LTRIM(RTRIM(ISNULL(r.strCategoryName,''))) c, LTRIM(RTRIM(ISNULL(r.strSubCategoryName,''))) s, SUM(ISNULL(r.intLossTimeInMinutes,0)) m, COUNT(*) e FROM mes.tblNPTRow r JOIN mes.tblNPTHeader h ON h.intNPTId=r.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND r.isActive=1 AND r.strCategoryName IN ('Mechanical','Electrical') AND ${plantIn(P,'h.strPlantName')} AND h.dteLossTimeDate > '${bdMax}' AND h.dteLossTimeDate <= '${today}' GROUP BY CONVERT(varchar(10), h.dteLossTimeDate,23), LTRIM(RTRIM(ISNULL(r.strCategoryName,''))), LTRIM(RTRIM(ISNULL(r.strSubCategoryName,'')))`, limit:2000});
+      if (bdRows.length) {
+        t.nptBd = t.nptBd||[];
+        const bk = new Map(t.nptBd.map(x=>[x.d+'|'+x.c+'|'+(x.s||''), x]));
+        bdRows.forEach(r=>{ const row={d:r.d, c:r.c, s:r.s, m:Math.round(num(r.m)), e:+r.e}; bk.set(row.d+'|'+row.c+'|'+(row.s||''), row); });
+        t.nptBd = [...bk.values()].sort((a,b)=>a.d<b.d?-1:1);
+      }
+    } catch {}
+
+    // Waste + waste target from mes.tblOeeProdWasteHeader(numWastageTargetQuantity) + Row(numWasteQuantity)
+    try {
+      const wMax = (t.waste && t.waste.length) ? t.waste[t.waste.length-1].d : snapMax;
+      const wRows = await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+        `SELECT CONVERT(varchar(10), h.dteProductionDate,23) d, LTRIM(RTRIM(h.strUOMName)) u, SUM(ISNULL(h.numWastageTargetQuantity,0)) tgt, SUM(ISNULL(wr.numWasteQuantity,0)) w FROM mes.tblOeeProdWasteHeader h LEFT JOIN mes.tblOeeProdWasteRow wr ON wr.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND ${pin} AND h.dteProductionDate > '${wMax}' AND h.dteProductionDate <= '${today}' GROUP BY CONVERT(varchar(10), h.dteProductionDate,23), LTRIM(RTRIM(h.strUOMName))`, limit:2000});
+      if (wRows.length) {
+        t.waste = t.waste||[];
+        const wk = new Map(t.waste.map(x=>[x.d+'|'+x.u, x]));
+        wRows.forEach(r=>{ const row={d:r.d, u:(r.u||'').replace(/\s+/g,''), waste:Math.round(num(r.w)*100)/100, target:Math.round(num(r.tgt)*100)/100}; wk.set(row.d+'|'+row.u, row); });
+        t.waste = [...wk.values()].sort((a,b)=>a.d<b.d?-1:1);
+      }
+    } catch {}
   }
   if (latest) live.generated = live.generated + ' · live ' + latest;
   return live;
@@ -117,6 +187,7 @@ module.exports = async (req, res) => {
     if (wantLive) data = await mergeLive(live);
     let out;
     try { out = await injectMOH(data); } catch { out = data; }
+    try { out = await injectProductTargets(out); } catch {}
     if (plant) { const p = out.plants?.[plant]; if (!p) return res.status(404).json({error:`Plant ${plant} not found`, available: out.order}); return res.status(200).json({plant:p, meta:p.meta, generated:out.generated}); }
     return res.status(200).json(out);
   } catch (e) { return res.status(500).json({ error: e.message }); }

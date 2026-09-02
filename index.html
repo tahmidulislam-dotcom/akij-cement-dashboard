@@ -156,19 +156,6 @@ tr:last-child td{border-bottom:none}
     <div class="ch"><canvas id="chRca"></canvas></div>
   </div>
 
-  <!-- SPC -->
-  <div class="panel">
-    <h3>SPC — Daily Output Control Chart</h3>
-    <div class="note">X-chart of daily good output with Center Line &amp; ±3σ control limits computed over selected period</div>
-    <div class="ch tall"><canvas id="chSpc"></canvas></div>
-  </div>
-
-  <!-- MRO -->
-  <div class="panel c6">
-    <h3>MRO — Maintenance Repair &amp; Overhaul Downtime</h3>
-    <div class="note">Unplanned maintenance (Mechanical + Electrical) downtime hours &amp; events</div>
-    <div class="ch"><canvas id="chMro"></canvas></div>
-  </div>
   <!-- Schedule Maintenance -->
   <div class="panel c6">
     <h3>Scheduled Maintenance</h3>
@@ -191,34 +178,6 @@ tr:last-child td{border-bottom:none}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:10px 0" id="mohBudgetKpi"></div>
     <div class="ch"><canvas id="chMohBudget"></canvas></div>
     <div style="font-size:11px;color:var(--mut);margin-top:8px" id="mohBudgetNote"></div>
-  </div>
-
-  <!-- Production Report (Google Sheets: N,O,P,AI,AJ,AK) -->
-  <div class="panel" id="prodReportPanel">
-    <h3>📋 Production Report — Speed &amp; Wastage <span style="color:var(--mut);font-weight:400;font-size:11px">(Google Sheets live)</span></h3>
-    <div class="note">Columns: Standard Speed (N) · Actual Speed (O) · Speed Gap (P) · Wastage Target % (AI) · Total Wastage (AJ) · Wastage % (AK) — <span id="prStatus">loading…</span></div>
-    <div class="filters" style="margin-bottom:12px">
-      <div class="fld"><label>Year</label><select id="prYear"><option value="All Years">All Years</option></select></div>
-      <div class="fld"><label>From Date</label><input type="date" id="prFrom"></div>
-      <div class="fld"><label>To Date</label><input type="date" id="prTo"></div>
-      <button class="btn" onclick="applyPrFilters()">Apply</button>
-      <button class="btn ghost" onclick="resetPrFilters()">Reset</button>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px" id="prKpi"></div>
-  </div>
-
-  <!-- APFIL Loom Unit-1 -->
-  <div class="panel" id="loom1Panel" style="display:none">
-    <h3>🪡 Loom Unit-1 Section <span style="color:var(--mut);font-weight:400;font-size:11px">(Google Sheets live)</span></h3>
-    <div class="note">Columns: Standard Speed (O) · Actual Speed (P) · Speed Gap (Q) · Wastage Target (AJ) · Total Wastage (AK) · Wastage% (AL) — <span id="loom1Status">loading…</span></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px" id="loom1Kpi"></div>
-  </div>
-
-  <!-- APFIL Loom Unit-2 -->
-  <div class="panel" id="loom2Panel" style="display:none">
-    <h3>🪡 Loom Unit-2 Section <span style="color:var(--mut);font-weight:400;font-size:11px">(Google Sheets live)</span></h3>
-    <div class="note">Columns: Standard Speed (O) · Actual Speed (P) · Speed Gap (Q) · Wastage Target (AJ) · Total Wastage (AK) · Wastage% (AL) — <span id="loom2Status">loading…</span></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px" id="loom2Kpi"></div>
   </div>
 
   <!-- RCA Table -->
@@ -248,6 +207,23 @@ tr:last-child td{border-bottom:none}
     <div id="reportArea">Report will appear here. Choose a period and click <b>Generate Analysis</b>.</div>
     <div class="em-row" style="margin-top:12px">
       <button class="btn ghost" onclick="downloadReport()">⬇ Download Report (HTML)</button>
+    </div>
+
+    <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+
+    <h3>🚨 Alert Email Recipients <span style="color:var(--mut);font-weight:400;font-size:11px">(threshold alerts · escalation: plant head → HOB/CEO → Deputy COO · runs daily 22:00 Dhaka)</span></h3>
+    <div class="note" id="alertEmailsNote">Loading alert recipients…</div>
+    <div style="overflow-x:auto;margin:10px 0"><table id="alertEmailTable"><thead>
+      <tr><th>SBU</th><th>Plant Head (1st)</th><th>HOB / CEO (2nd)</th><th>Deputy COO (3rd+)</th></tr>
+    </thead><tbody></tbody></table></div>
+    <div class="em-row" style="margin-top:12px">
+      <button class="btn ghost" onclick="toggleAlertEdit()">✏️ Edit Alert Recipients</button>
+      <button class="btn" onclick="saveAlertEmails()">💾 Save Alert Recipients</button>
+      <button class="btn ghost" onclick="runAlertCheck()">▶ Run Alert Check (test)</button>
+      <span class="ai-status" id="alertStatus"></span>
+    </div>
+    <div style="margin-top:12px;font-size:12px;color:var(--mut)">
+      <b>Conditions checked:</b> OEE &lt; target · Yield &lt; 97% · Capacity Util &lt; 80% · Planning &lt; 80% · Good Output (capacity) · Waste &gt; target · MOH &gt; target · Scheduled maintenance vs plan.
     </div>
 
     <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
@@ -283,35 +259,26 @@ const hrs = m => m==null?null:m/60;
 /* ---------- state ---------- */
 let FROM, TO, PLANT, P;
 
-/* ---------- KPI targets (from target sheet, per SBU per month) ---------- */
-const TARGET_SBU = { accl:'ACCL', aafl:'AAFL', aelflour:'AEFML', fal:'FAL', hrml:'HRML', ail:'AIL', apfil:'APFIL' };
-let TARGETS=null;
-async function loadTargets(){
-  try{
-    const r=await fetch(`${API}/api/targets`,{cache:'no-store'});
-    const j=await r.json();
-    if(j && j.bySbu) TARGETS=j.bySbu;
-  }catch(e){ console.warn('targets fetch failed', e.message); }
+/* ---------- OEE targets (per SBU per month, %) ---------- */
+const OEE_SBU = { accl:'ACCL', apfil:'APFIL', ail:'AIL', absl:'ABSL', aelflour:'AEFML', hrml:'MRML', aafl:'AAFL' };
+const OEE_TARGETS = {
+  ACCL: { '2026-07':64.23,'2026-08':73.49,'2026-09':70.88,'2026-10':71.68,'2026-11':59.60,'2026-12':74.10,'2027-01':74.10,'2027-02':67.65,'2027-03':75.00,'2027-04':72.08,'2027-05':74.90,'2027-06':67.45 },
+  APFIL: { '2026-07':89.87,'2026-08':90.48,'2026-09':89.87,'2026-10':91.09,'2026-11':92.30,'2026-12':92.91,'2027-01':91.09,'2027-02':84.41,'2027-03':78.94,'2027-04':88.05,'2027-05':80.76,'2027-06':89.87 },
+  AIL:   { '2026-07':44.86,'2026-08':0,'2026-09':0,'2026-10':0,'2026-11':0,'2026-12':0,'2027-01':0,'2027-02':48.15,'2027-03':56.18,'2027-04':64.21,'2027-05':60.19,'2027-06':80.26 },
+  ABSL:  { '2026-07':5.41,'2026-08':5.41,'2026-09':5.41,'2026-10':5.41,'2026-11':7.53,'2026-12':0,'2027-01':0,'2027-02':5.41,'2027-03':7.53,'2027-04':7.53,'2027-05':7.53,'2027-06':7.53 },
+  AEFML: { '2026-07':88.17,'2026-08':84.32,'2026-09':78.38,'2026-10':91.49,'2026-11':88.50,'2026-12':89.25,'2027-01':83.36,'2027-02':69.67,'2027-03':86.85,'2027-04':88.03,'2027-05':84.67,'2027-06':86.58 },
+  MRML:  { '2026-07':49.43,'2026-08':48.94,'2026-09':51.94,'2026-10':51.35,'2026-11':41.65,'2026-12':49.21,'2027-01':47.15,'2027-02':55.09,'2027-03':45.06,'2027-04':50.04,'2027-05':34.09,'2027-06':36.91 },
+  AAFL:  { '2026-07':64.20,'2026-08':66.06,'2026-09':66.71,'2026-10':67.16,'2026-11':64.86,'2026-12':64.55,'2027-01':65.86,'2027-02':65.69,'2027-03':65.06,'2027-04':69.62,'2027-05':72.29,'2027-06':72.87 },
+};
+function oeeTgt(ym){
+  const sbu = OEE_SBU[PLANT];
+  if(!sbu || !OEE_TARGETS[sbu]) return null;
+  const ymKey = String(ym||'').slice(0,7);   // month bucket: YYYY-MM (works for both date and month)
+  const v = OEE_TARGETS[sbu][ymKey];
+  return (v==null || v===0) ? null : v;
 }
-// OEE monthly target for current plant + a given month bucket (YYYY-MM); returns number or null
-function oeeTarget(ym){
-  const sbu=TARGET_SBU[PLANT];
-  if(!sbu || !TARGETS || !TARGETS[sbu]) return null;
-  const m=TARGETS[sbu][ym];
-  if(!m || m.OEE==null) return null;
-  return m.OEE;
-}
-// Generic target helper for a KPI key of the current plant for a month bucket (YYYY-MM)
-function kpiTarget(key, ym){
-  const sbu=TARGET_SBU[PLANT];
-  if(!sbu || !TARGETS || !TARGETS[sbu]) return null;
-  const m=TARGETS[sbu][ym];
-  if(!m || m[key]==null) return null;
-  return m[key];
-}
-// Current month bucket from selected To date (or latest available)
-function curYm(){ return (TO || P.meta.maxDate).slice(0,7); }
 
+/* ---------- KPI helpers (data from iBOSDD) ---------- */
 async function fetchLiveData(){
   const liveEl=document.querySelector('.live');
   if(typeof fetch==='undefined') return false;
@@ -379,7 +346,6 @@ async function init(){
   const liveEl=document.querySelector('.live');
   if(liveEl) liveEl.textContent='● LOADING LIVE MCP…';
   await fetchLiveData();
-  await loadTargets();
   $('plantSel').innerHTML = DATA.order.map(k=>`<option value="${k}">${DATA.names[k]}</option>`).join('');
   $('plantSel').addEventListener('change', ()=> setPlant($('plantSel').value));
   $('yearSel').addEventListener('change', ()=>{
@@ -420,8 +386,6 @@ function setPlant(key){
   const rn=$('rcaPlantNote'); if(rn) rn.textContent=P.meta.name;
   render();
   loadMachineOee();
-  renderProdReport();
-  renderLoomSections();
 }
 /* ---- Machine OEE detail (VRM for ACCL, Rolling for Ispat, Loom for Poly Fibre) ---- */
 const MACHINE_OEE_TITLES = {
@@ -448,14 +412,26 @@ async function loadMachineOee(){
     // KPI cards: OEE + factors
     const unit = (c && c.u) || (j.perMachine[0] && j.perMachine[0].u) || 't';
     const shortName = cfg.label.split(' — ')[0];
+    // Good-Output capacity target (Σ Cap/hr × AvailMin/60) for the selected range, from machine-filtered capTarget
+    let mTgt='';
+    try{
+      const rows=(P.capTarget||[]).filter(x=>inRange(x.d));
+      if(rows.length){
+        const uLabel = x=>({ton:'MT',metrictons:'MT',metricton:'MT',mt:'MT',kilogram:'Kg',kg:'Kg',bag:'Bag',pices:'Pcs',pecs:'Pcs',cubicfoot:'CubicFt',meter:'Meter',metre:'Meter'}[x]||x);
+        const byU0={}; rows.forEach(x=>{byU0[x.u]=byU0[x.u]||0;byU0[x.u]+=x.target;});
+        const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
+        const parts=Object.entries(byU0).map(([u,q])=>{const isMT=/ton|mt/.test(u);return `${fmt(isMT?q:q/1000,0)} ${isMT?'MT':uLabel(u)}`;});
+        mTgt=`Target ${parts.join(' · ')} / ${days} day${days>1?'s':''}`;
+      }
+    }catch(e){}
     const kpi=[
       {l:shortName+' — Combined OEE', v:pct(c.OEE), ac:'var(--teal)', big:true},
-      {l:'OEE Target', v:(oeeTarget((TO||P.meta.maxDate).slice(0,7))!=null?oeeTarget((TO||P.meta.maxDate).slice(0,7))+'%':'—'), s:'Target sheet · '+((TO||P.meta.maxDate).slice(0,7)), ac:'var(--pink)'},
+      {l:'OEE Target', v:(oeeTgt((TO||P.meta.maxDate).slice(0,7))!=null?oeeTgt((TO||P.meta.maxDate).slice(0,7))+'%':'—'), s:'Target · '+((TO||P.meta.maxDate).slice(0,7)), ac:'var(--pink)'},
       {l:'Availability', v:pct(c.A), s:'Runtime ÷ Loading', ac:'var(--blue)'},
       {l:'Performance', v:pct(c.P), s:'Actual ÷ (Rated×Runtime)', ac:'var(--amber)'},
       {l:'Quality / Yield', v:pct(c.Q), s:'Good ÷ Actual', ac:'var(--green)'},
-      {l:'Capacity Utilization', v:pct(c.CU), s:'Actual ÷ (Rated×Shift)', ac:'var(--purple)'},
-      {l:'Good Output', v:fmt(c.good,0)+' '+unit, s:'Actual '+fmt(c.actual,0)+' '+unit, ac:'var(--pink)'},
+      {l:'Capacity Utilization', v:pct(c.CU), s:'Actual ÷ (Rated×Shift)'+((!['armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','absl'].includes(PLANT))?' · Target 80%':''), ac:'var(--purple)'},
+      {l:'Good Output', v:fmt(c.good,0)+' '+unit, s:'Actual '+fmt(c.actual,0)+' '+unit+(mTgt?' · '+mTgt:''), ac:'var(--pink)'},
     ].map(k=>`<div class="kpi" style="--ac:${k.ac};padding:11px 13px"><div class="lbl">${k.l}</div><div class="val" style="${k.big?'font-size:24px':'font-size:20px'}">${k.v}</div><div class="sub">${k.s||''}</div></div>`).join('');
     $('vrmKpi').innerHTML=kpi;
     // Calculation / breakdown table
@@ -479,115 +455,6 @@ async function loadMachineOee(){
         plugins:{legend:{position:'top'},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y!=null?c.parsed.y.toFixed(1)+'%':'—'}`}}},
         scales:{y:{min:0,max:110,ticks:{callback:v=>v+'%'}},x:{ticks:{maxTicksLimit:15}}}}});
   }catch(e){ panel.style.display='none'; }
-}
-/* ---- Production Report (Google Sheets: N,O,P,AI,AJ,AK) ---- */
-const PR_SHEET_KEY = { accl:'accl_vrm', ail:'ail', hrml:'hrml', fal:'fal', aelflour:'aelflour', aafl:'aafl', absl:'absl' };
-let prData=null;
-async function renderProdReport(){
-  const panel=$('prodReportPanel'); if(!panel) return;
-  const st=$('prStatus'); if(st) st.textContent='loading…';
-  const key = PR_SHEET_KEY[PLANT];
-  if(!key){ if(st) st.textContent='No production report sheet for this plant.'; panel.style.display='none'; return; }
-  panel.style.display='';
-  try{
-    const r=await fetch(`${API}/api/prod-report?plant=${key}`,{cache:'no-store'});
-    const j=await r.json();
-    const p=j.plant;
-    if(!p || p.status!=='ok' || !p.daily || !p.daily.length){
-      if(st) st.textContent = p && p.status==='error'
-        ? (p.error==='NOT_PUBLIC'||p.error==='HTTP 401' ? 'Sheet not publicly shareable — enable link sharing to view.' : 'Error: '+p.error)
-        : 'No data in production report sheet.';
-      panel.style.display = (p && p.status==='ok' && p.daily && p.daily.length) ? '' : 'none';
-      return;
-    }
-    prData = p;
-    if(st) st.textContent=`${p.name} · ${p.daily.length} days (${p.from} → ${p.to}) · Google Sheets live`;
-    initPrFilters(p.daily);
-    renderPrKpi(p.daily);
-  }catch(e){
-    if(st) st.textContent='Failed to load: '+e.message;
-  }
-}
-function initPrFilters(daily){
-  const years=[...new Set(daily.map(x=>x.date.slice(0,4)))].sort();
-  $('prYear').innerHTML='<option value="All Years">All Years</option>'+years.map(y=>`<option value="${y}">${y}</option>`).join('');
-  const min=daily[0].date, max=daily[daily.length-1].date;
-  ['prFrom','prTo'].forEach(id=>{ $(id).min=min; $(id).max=max; });
-  $('prFrom').value=min; $('prTo').value=max;
-  $('prYear').value='All Years';
-}
-function applyPrFilters(){
-  const f=$('prFrom').value, t=$('prTo').value;
-  if(f && t && f>t){ alert('From date cannot be after To date.'); return; }
-  renderPrKpi(prData?prData.daily:[]);
-}
-function resetPrFilters(){
-  if(!prData) return;
-  initPrFilters(prData.daily);
-  renderPrKpi(prData.daily);
-}
-$('prYear') && $('prYear').addEventListener && $('prYear').addEventListener('change', ()=>{
-  const y=$('prYear').value;
-  if(y==='All Years'){ if(prData){ $('prFrom').value=prData.daily[0].date; $('prTo').value=prData.daily[prData.daily.length-1].date; } }
-  else { const days=prData.daily.filter(x=>x.date.slice(0,4)===y); if(days.length){ $('prFrom').value=days[0].date; $('prTo').value=days[days.length-1].date; } }
-  renderPrKpi(prData?prData.daily:[]);
-});
-function renderPrKpi(daily){
-  const f=$('prFrom').value, t=$('prTo').value;
-  const rows=daily.filter(d=>{ const okF=!f||d.date>=f; const okT=!t||d.date<=t; return okF&&okT; });
-  const kpi=$('prKpi'); if(!kpi) return;
-  if(!rows.length){ kpi.innerHTML='<div class="empty-msg">No data in the selected period.</div>'; return; }
-  const sum=n=>{const v=rows.filter(x=>x[n]!=null); return v.length? v.reduce((s,x)=>s+x[n],0)/v.length : null;};
-  const totW=rows.reduce((s,x)=>s+(x.total_wastage||0),0);
-  const days=new Set(rows.map(x=>x.date)).size;
-  const cards=[
-    {l:'Std Speed (avg)', v:sum('standard_speed'), ac:'var(--blue)'},
-    {l:'Actual Speed (avg)', v:sum('actual_speed'), ac:'var(--teal)'},
-    {l:'Speed Gap (avg)', v:sum('speed_gap'), ac:'var(--amber)'},
-    {l:'Wastage Tgt % (avg)', v:sum('wastage_target_pct'), ac:'var(--purple)', pct:true},
-    {l:'Wastage % (avg)', v:sum('wastage_pct'), ac:'var(--red)', pct:true},
-    {l:'Total Wastage', v:totW, ac:'var(--pink)'},
-    {l:'Days', v:days, ac:'var(--green)'},
-  ];
-  kpi.innerHTML=cards.map(c=>`<div class="kpi" style="--ac:${c.ac}"><div class="lbl">${c.l}</div><div class="val">${c.pct?(c.v==null?'—':c.v.toFixed(2)+'%'):(c.v==null?'—':Number(c.v).toLocaleString('en-US',{maximumFractionDigits:2}))}</div></div>`).join('');
-}
-/* ---- APFIL Loom Unit-1 & Unit-2 (Google Sheets: O,P,Q,AJ,AK,AL) ---- */
-async function loadLoomUnit(unit){
-  const panel=$(unit+'Panel'), st=$(unit+'Status'), kpi=$(unit+'Kpi');
-  if(!panel||!kpi) return;
-  const key = PLANT==='apfil' ? unit : null;
-  if(!key){ panel.style.display='none'; return; }
-  st.textContent='loading…'; panel.style.display='';
-  try{
-    const r=await fetch(`${API}/api/loom-report?unit=${unit}`,{cache:'no-store'});
-    const j=await r.json();
-    const p=j.plant;
-    if(!p || p.status!=='ok' || !p.daily || !p.daily.length){
-      st.textContent = p && p.status==='error' ? 'Error: '+p.error : 'No data in loom sheet.';
-      panel.style.display = (p&&p.status==='ok'&&p.daily&&p.daily.length)?'':'none';
-      return;
-    }
-    st.textContent=`${p.name} · ${p.daily.length} days (${p.from} → ${p.to}) · Google Sheets live`;
-    const rows=p.daily;
-    const sum=n=>{const v=rows.filter(x=>x[n]!=null); return v.length? v.reduce((s,x)=>s+x[n],0)/v.length : null;};
-    const totW=rows.reduce((s,x)=>s+(x.total_wastage||0),0);
-    const days=new Set(rows.map(x=>x.date)).size;
-    const cards=[
-      {l:'Std Speed (avg)', v:sum('standard_speed'), ac:'var(--blue)'},
-      {l:'Actual Speed (avg)', v:sum('actual_speed'), ac:'var(--teal)'},
-      {l:'Speed Gap (avg)', v:sum('speed_gap'), ac:'var(--amber)'},
-      {l:'Wastage Tgt % (avg)', v:sum('wastage_target_pct'), ac:'var(--purple)', pct:true},
-      {l:'Wastage % (avg)', v:sum('wastage_pct'), ac:'var(--red)', pct:true},
-      {l:'Total Wastage', v:totW, ac:'var(--pink)'},
-      {l:'Days', v:days, ac:'var(--green)'},
-    ];
-    kpi.innerHTML=cards.map(c=>`<div class="kpi" style="--ac:${c.ac}"><div class="lbl">${c.l}</div><div class="val">${c.pct?(c.v==null?'—':c.v.toFixed(2)+'%'):(c.v==null?'—':Number(c.v).toLocaleString('en-US',{maximumFractionDigits:2}))}</div></div>`).join('');
-  }catch(e){ st.textContent='Failed to load: '+e.message; }
-}
-async function renderLoomSections(){
-  if(PLANT!=='apfil'){ $('loom1Panel')&&($('loom1Panel').style.display='none'); $('loom2Panel')&&($('loom2Panel').style.display='none'); return; }
-  await loadLoomUnit('loom1');
-  await loadLoomUnit('loom2');
 }
 function applyFilters(){
   const f=$('fromDate').value, t=$('toDate').value;
@@ -668,16 +535,12 @@ function render(){
   const nptPct = loadingTot>0? nptMin/loadingTot : null;
 
   /* ---- Breakdowns (Mechanical + Electrical) ---- */
-  const bds = {}; let bdMin=0, bdEvt=0;
+  const bds = {};
   P.nptBd.filter(r=>inRange(r.d)).forEach(r=>{
     const k = r.s? `${r.c} — ${r.s}` : r.c;
-    bds[k]=bds[k]||{m:0,e:0}; bds[k].m+=r.m; bds[k].e+=r.e; bdMin+=r.m; bdEvt+=r.e;
+    bds[k]=bds[k]||{m:0,e:0}; bds[k].m+=r.m; bds[k].e+=r.e;
   });
   const top5 = Object.entries(bds).sort((a,b)=>b[1].m-a[1].m).slice(0,5);
-  const rtDaySet = new Set(D.filter(r=>r.r>0).map(r=>r.d));
-  const runtimeHrs = D.reduce((s,r)=>s+r.r,0)/60;
-  let bdEvtRt = 0, bdMinRt = 0;
-  P.nptBd.filter(r=>inRange(r.d)&&rtDaySet.has(r.d)).forEach(r=>{ bdEvtRt+=r.e; bdMinRt+=r.m; });
   /* ---- Scheduled maintenance ---- */
   let smMin=0, smEvt=0; const smM={};
   P.nptCat.filter(r=>inRange(r.d)&&r.c==='Schedule Maintenance').forEach(r=>{
@@ -695,36 +558,63 @@ function render(){
   let mohTot=0; const mohRows=[];
   P.moh.filter(m=>m.c!==0 && m.k>=ym(FROM)&&m.k<=ym(TO)).forEach(m=>{ mohTot+=m.c; mohRows.push(m); });
 
-  /* ---- SPC ---- */
-  const spcDays = domUom? D.filter(r=>r.u===domUom).reduce((acc,r)=>{ acc[r.d]=(acc[r.d]||0)+r.g; return acc; },{}) : {};
-  const spcArr = Object.entries(spcDays).sort((a,b)=>a[0]<b[0]?-1:1);
-  const spcVals = spcArr.map(x=>x[1]);
-  const mean = spcVals.length? spcVals.reduce((a,b)=>a+b,0)/spcVals.length : null;
-  const sd = spcVals.length>1? Math.sqrt(spcVals.reduce((s,v)=>s+(v-mean)**2,0)/(spcVals.length-1)) : null;
-
   /* ---- KPI cards ---- */
   const uSt=uomStats(D);
   const planTot=pvCard.planTot, actTot=pvCard.actTot;
   const planAch = pvCard.ach;
 
-  const tYm=curYm();
-  const tCap=kpiTarget('CapacityUtilization', tYm);
-  const tYld=kpiTarget('Yield', tYm);
-  const tProd=kpiTarget('Production', tYm);
-  const tProdDay = tProd!=null ? tProd/30 : null;   // monthly production target -> per-day (÷30)
-  const tgtFmt=(v,isPct)=>(v==null?'—':(isPct?v+'%':fmt(v,0)));
-  const tgtSub = (v,isPct)=> (v==null?'':` · <b style="color:var(--pink)">Tgt ${tgtFmt(v,isPct)}</b>`);
-  const tgtLine = (v,isPct)=> (v==null?'':`<span style="display:block;margin-top:6px;color:var(--pink);font-weight:800;font-size:12px;letter-spacing:.3px">🎯 Target Yield ${tgtFmt(v,isPct)}</span>`);
+  // Targets (from iBOSDD + fixed defaults). Excluded (no target) for ARMCL all plants + ABSL.
+  const NO_TARGET_PLANTS = ['armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','absl'];
+  const hasTarget = !NO_TARGET_PLANTS.includes(PLANT);
+  const YIELD_TGT = hasTarget ? 97 : null;
+  const PLAN_TGT  = hasTarget ? 80 : null;
+  // Production target from iBOSDD bgt.tblBudgetProduction (per month, per UoM). Per-day = /30. Weight UoMs only.
+  const curM = (TO||P.meta.maxDate).slice(0,7);
+  const isWeight = u => /ton|kg|kilogram|mt/.test(String(u||'').toLowerCase());
+  // Good Output in weight UoMs only (MT/Kg)
+  const wRows = D.filter(r=>isWeight(r.u));
+  const wStats = uomStats(wRows);
+  const goodVal = wStats.length ? wStats.map(x=>`${fmt(x.q/1000,1)} ${x.u==='Ton'||/ton|mt/.test(x.u)?'MT':'Kg'}`).join(' · ') : '—';
+  const tgtLine = (v,suffix)=> (v==null?'':`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${v}${suffix||''}</div>`);
+  // Per-day capacity targets (iBOSDD: Σ(Cap/hr × AvailMin/60)) — sum over the selected [FROM,TO] range
+  const capTgtRows = (P.capTarget||[]).filter(x=>inRange(x.d));
+  const uLabel = u => ({ton:'MT',metrictons:'MT',metricton:'MT',mt:'MT',kilogram:'Kg',kg:'Kg',bag:'Bag',pices:'Pcs',pecs:'Pcs',cubicfoot:'CubicFt',meter:'Meter',metre:'Meter'}[u] || (u.charAt(0).toUpperCase()+u.slice(1)));
+  const prodLine = ()=> {
+    if(!capTgtRows.length) return '';
+    const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
+    const byU = {};
+    capTgtRows.forEach(x=>{ const isMT=/ton|mt/.test(x.u); byU[x.u]=(byU[x.u]||0)+(isMT?x.target:(x.target||0)/1000); });
+    const parts = Object.entries(byU).map(([u,q])=>`${fmt(q,0)} ${uLabel(u)}`);
+    const total = parts.length?parts.join(' · '):'—';
+    let perDay = 0; Object.entries(byU).forEach(([u,q])=>perDay+=q);
+    return `<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${total} · ${fmt(perDay/days,0)}/day</div>`;
+  };
+  // Waste actual + target (iBOSDD) — today's value in a separate card
+  const wasteVal = (()=> {
+    const wr = (P.waste||[]).filter(x=>isWeight(x.u));
+    if(!wr.length) return {v:null, s:'No waste data'};
+    const today = (TO||P.meta.maxDate).slice(0,10);
+    const rows = wr.filter(x=>x.d===today);
+    if(!rows.length) return {v:'—', s:`${today} · No data`};
+    let w=0, t=0;
+    rows.forEach(x=>{ w+=x.waste||0; t+=x.target||0; });
+    const isMT = /ton|mt/.test(String(rows[0].u).toLowerCase());
+    const unit = isMT ? 'MT' : 'Kg';
+    const val = isMT ? fmt(w,1) : fmt(w,1);
+    const tgtTxt = (t>0)? `Target ${isMT?fmt(t,1):fmt(t,1)} ${unit}` : 'No target set';
+    return { v:`${val} ${unit}`, s:`${today} · ${tgtTxt}` };
+  })();
+
   const kpis = [
     {l:'Production OEE', v:pct(agg.OEE), s:agg.A==null?`Runtime capture starts ${P.meta.rtStart}`:`A ${pct(agg.A,0)} · P ${pct(agg.P,0)} · Q ${pct(agg.Q,0)}`, ac:'var(--teal)'},
-    {l:'Capacity Utilization', v:pct(agg.CU), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.cu,0)}`).join(' · ')+tgtSub(tCap,false), ac:'var(--blue)'},
+    {l:'Capacity Utilization', v:pct(agg.CU), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.cu,0)}`).join(' · '), ac:'var(--blue)'},
     {l:'NPT (Non-Productive Time)', v:pct(nptPct), s:`${fmt(nptMin/60,0)} hrs NPT vs ${fmt(loadingTot/60,0)} hrs loading`, ac:'var(--red)'},
-    {l:'Yield', v:pct(agg.Q), s:(uSt.slice(0,2).map(x=>`${x.u} ${pct(x.y,1)}`).join(' · ')||'—')+tgtLine(tYld,true), ac:'var(--green)'},
-    {l:'Planning Achievement', v:pct(planAch), s:`${fmt(actTot,0)} vs ${fmt(planTot,0)} ${domUom||''} planned${pvCard.coverage<0.95?` · ${(pvCard.coverage*100).toFixed(0)}% UoM-matched`:''}`, ac:'var(--amber)'},
-    {l:'MRO Downtime', v:fmt(bdMin/60,0)+' h', s:`${bdEvt} unplanned maint. events`, ac:'var(--pink)'},
+    {l:'Yield', v:pct(agg.Q), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.y,1)}`).join(' · ')+tgtLine(YIELD_TGT!=null?YIELD_TGT+'%':null), ac:'var(--green)'},
+    {l:'Planning Achievement', v:pct(planAch), s:`${fmt(actTot,0)} vs ${fmt(planTot,0)} ${domUom||''} planned${pvCard.coverage<0.95?` · ${(pvCard.coverage*100).toFixed(0)}% UoM-matched`:''}`+tgtLine(PLAN_TGT!=null?PLAN_TGT+'%':null), ac:'var(--amber)'},
     {l:'Scheduled Maintenance', v:fmt(smMin/60,0)+' h', s:`${smEvt} planned events`, ac:'var(--blue)'},
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},
-    {l:'Good Output', v:uSt[0]?fmt(uSt[0].q,0):'—', s:(uSt[0]?`${uSt[0].u}${uSt[1]?` · ${fmt(uSt[1].q,0)} ${uSt[1].u}`:''}`:'No output in range')+(tProdDay!=null?`<div style="margin-top:5px;color:var(--pink);font-weight:700">Target ${fmt(tProdDay,0)}/day</div>`:''), ac:'var(--teal)'},
+    {l:'Good Output', v:goodVal, s:prodLine(), ac:'var(--teal)'},
+    {l:'Waste', v:(wasteVal.v||'—'), s:(wasteVal.s||''), ac:'var(--red)'},
   ];
   $('kpiGrid').innerHTML = kpis.map(k=>`<div class="kpi" style="--ac:${k.ac}"><div class="lbl">${k.l}</div><div class="val">${k.v}</div><div class="sub">${k.s||''}</div></div>`).join('');
 
@@ -745,7 +635,7 @@ function render(){
   const aS=bk.map(b=>trend[b]?plantOEE(trend[b]).A*100:null);
   const pS=bk.map(b=>trend[b]?plantOEE(trend[b]).P*100:null);
   const qS=bk.map(b=>trend[b]?plantOEE(trend[b]).Q*100:null);
-  const tgtS=bk.map(b=>oeeTarget(b));
+  const tgtS=bk.map(b=>oeeTgt(b));
   const oeeDatasets=[
     {label:'OEE %',data:oeeS,borderColor:'#2dd4bf',backgroundColor:'rgba(45,212,191,.12)',fill:true,tension:.35,borderWidth:2.5,pointRadius:2},
     {label:'Availability %',data:aS,borderColor:'#38bdf8',tension:.35,borderWidth:1.5,pointRadius:0,borderDash:[4,3]},
@@ -807,30 +697,6 @@ function render(){
     options:{responsive:true,maintainAspectRatio:false,cutout:'58%',
       plugins:{legend:{position:'right',...legendOpt},tooltip:{callbacks:{label:c=>`${c.label}: ${c.parsed} actions`}}}}});
 
-  /* ---- SPC ---- */
-  const spcLabels=spcArr.map(x=>x[0]);
-  const ucl=mean!=null&&sd!=null? mean+3*sd:null, lcl=mean!=null&&sd!=null? Math.max(0,mean-3*sd):null;
-  charts.spc=new Chart($('chSpc'),{type:'line',data:{labels:spcLabels,datasets:[
-    {label:`Daily Good Output (${domUom||'qty'})`,data:spcVals,borderColor:'#38bdf8',backgroundColor:'rgba(56,189,248,.10)',fill:false,tension:.25,borderWidth:1.8,pointRadius:2.2,
-      pointBackgroundColor:spcVals.map(v=>(ucl!=null&&(v>ucl||v<lcl))?'#f87171':'#38bdf8')},
-    {label:`CL ${fmt(mean,0)}`,data:spcLabels.map(()=>mean),borderColor:'#4ade80',borderDash:[6,4],borderWidth:1.6,pointRadius:0},
-    {label:`UCL +3σ ${fmt(ucl,0)}`,data:spcLabels.map(()=>ucl),borderColor:'#f87171',borderDash:[6,4],borderWidth:1.4,pointRadius:0},
-    {label:`LCL −3σ ${fmt(lcl,0)}`,data:spcLabels.map(()=>lcl),borderColor:'#f87171',borderDash:[6,4],borderWidth:1.4,pointRadius:0},
-  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
-    plugins:{legend:{position:'top',...legendOpt},
-      subtitle:{display:true,text:sd!=null?`σ = ${fmt(sd,0)} ${domUom||''} · ${spcVals.filter(v=>v>ucl||v<lcl).length} point(s) out of control`:'',position:'bottom',color:'#8fa3c0'}},
-    scales:{y:{...gridOpt,ticks:{...gridOpt.ticks,callback:v=>fmt(v/1e3,0)+'k'}},x:{...gridOpt,ticks:{maxTicksLimit:18}}}}});
-
-  /* ---- MRO ---- */
-  const bdM={}; P.nptBd.filter(r=>inRange(r.d)).forEach(r=>{const b=bucket(r.d); bdM[b]=bdM[b]||{m:0,e:0}; bdM[b].m+=r.m; bdM[b].e+=r.e;});
-
-  /* ---- MRO ---- */
-  charts.mro=new Chart($('chMro'),{data:{labels:bk,datasets:[
-    {type:'bar',label:'MRO Downtime (hrs)',data:bk.map(b=>bdM[b]?bdM[b].m/60:null),backgroundColor:'rgba(244,114,182,.65)',borderRadius:5},
-    {type:'line',label:'Events',data:bk.map(b=>bdM[b]?bdM[b].e:null),borderColor:'#38bdf8',yAxisID:'y1',tension:.3,borderWidth:2,pointRadius:2},
-  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
-    plugins:{legend:{position:'top',...legendOpt},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y,0)}`}}},
-    scales:{y:{...gridOpt},y1:{position:'right',grid:{drawOnChartArea:false}},x:gridOpt}}});
 
   /* ---- Scheduled maintenance ---- */
   const smBk={}; P.nptCat.filter(r=>inRange(r.d)&&r.c==='Schedule Maintenance').forEach(r=>{const b=bucket(r.d); smBk[b]=smBk[b]||{m:0,e:0}; smBk[b].m+=r.m; smBk[b].e+=r.e;});
@@ -931,7 +797,7 @@ function render(){
   /* ---- footer ---- */
   $('foot').innerHTML = `<b>KPI definitions —</b> Availability = Machine Runtime ÷ Loading Time · Performance = Actual Output ÷ (Rated Capacity/hr × Runtime) · Quality/Yield = Good ÷ Actual Output · OEE = A×P×Q ·
   Capacity Utilization = Actual ÷ (Rated Capacity/hr × Shift Duration) · NPT% = NPT minutes ÷ Loading minutes · Planning Achievement = Actual ÷ Planned good output (prorated for partial months, UoM-matched) ·
-  MRO = unplanned maintenance downtime · MOH = manufacturing overhead booked to production orders (BDT).
+  MOH = manufacturing overhead booked to production orders (BDT).
   ${P.meta.rtStart?`Machine runtime capture in MES for this plant began <b>${P.meta.rtStart}</b> — OEE, Availability &amp; Performance are unavailable ('—') for earlier periods; other KPIs remain valid for the full history.`:''}
   <br><b>Data sources —</b> mes.tblOeeProdWasteHeaderArc / tblNPTRowArc / tblProductionPlanningRowArc / tblRCAAPArc · mes production orders (MOH) · Plant: <b>${P.meta.name}</b>, extracted ${DATA.generated}.
   MOH is recorded at company (business-unit) level — for multi-plant companies (ARMCL, Akij Essentials) these figures span all their plants.`;
@@ -946,7 +812,58 @@ let lastReport = null;
 function aiStatus(msg, cls){ const el=$('aiStatus'); el.innerHTML=`<span class="${cls||'wait'} pulse">${msg}</span>`; }
 function emStatusMsg(msg, cls){ const el=$('emStatus'); el.innerHTML=`<span class="${cls||'wait'}">${msg}</span>`; }
 
+/* ---------- Alert email recipients (threshold alerts) ---------- */
+let alertCfg=null, alertEditOn=false;
+function alertStatus(msg, cls){ const el=$('alertStatus'); if(el) el.innerHTML=`<span class="${cls||'wait'}">${msg}</span>`; }
+function loadAlertEmails(){
+  fetch(`${API}/api/alert-emails`).then(r=>r.json()).then(d=>{
+    alertCfg=d.config||{}; renderAlertTable();
+    if($('alertEmailsNote')) $('alertEmailsNote').textContent=`Recipients loaded · escalation state: count=${Object.keys(d.state&&d.state.counts||{}).length} SBU · date ${d.state||''?'':''} `;
+  }).catch(e=>{ if($('alertEmailsNote')) $('alertEmailsNote').textContent='Failed to load alert recipients: '+e.message; });
+}
+function renderAlertTable(){
+  const tb=$('alertEmailTable').querySelector('tbody'); if(!tb) return;
+  tb.innerHTML='';
+  const order=['accl','apfil','ail','aafl','aelflour','aeldal','hrml','fal','absl','armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','alel'];
+  for(const k of order){
+    const c=(alertCfg&&alertCfg[k])||{};
+    const ph=(c.plant_head||[]).join(', ')||'—';
+    const hc=(c.hob_ceo||[]).join(', ')||'—';
+    const dep=(alertCfg&&alertCfg._deputy)||'deputy.coo@akijresource.com';
+    const tr=document.createElement('tr');
+    if(alertEditOn){
+      tr.innerHTML=`<td>${c.name||k}</td>
+        <td><input id="ph_${k}" style="width:100%" value="${ph}"></td>
+        <td><input id="hc_${k}" style="width:100%" value="${hc}"></td>
+        <td><input id="dep_${k}" style="width:100%" value="${dep}"></td>`;
+    } else {
+      tr.innerHTML=`<td><b>${c.name||k}</b></td><td>${ph}</td><td>${hc}</td><td>${dep}</td>`;
+    }
+    tb.appendChild(tr);
+  }
+}
+function toggleAlertEdit(){ alertEditOn=!alertEditOn; renderAlertTable(); alertStatus(alertEditOn?'Editing…':'View mode','wait'); }
+function saveAlertEmails(){
+  if(!alertCfg){ alertStatus('No config','err'); return; }
+  const cfg=JSON.parse(JSON.stringify(alertCfg));
+  const split=s=>String(s).split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
+  const order=['accl','apfil','ail','aafl','aelflour','aeldal','hrml','fal','absl','armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','alel'];
+  for(const k of order){ const e=$('ph_'+k)||$('hc_'+k)||$('dep_'+k); if(!e) continue; cfg[k]=cfg[k]||{}; if($('ph_'+k)) cfg[k].plant_head=split($('ph_'+k).value); if($('hc_'+k)) cfg[k].hob_ceo=split($('hc_'+k).value); cfg._deputy = $('dep_'+k)?$('dep_'+k).value.trim():cfg._deputy; }
+  fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})}).then(r=>r.json()).then(d=>{
+    alertCfg=d.config||cfg; alertEditOn=false; renderAlertTable(); alertStatus('Saved ✔','ok');
+  }).catch(e=>alertStatus('Save failed: '+e.message,'err'));
+}
+function runAlertCheck(){
+  alertStatus('Running alert check — sending emails…','wait');
+  fetch(`${API}/api/alert-check`,{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.error) return alertStatus('Error: '+d.error,'err');
+    const s=(d.sent||[]);
+    alertStatus(`Checked · ${s.length} alert(s) escalated: ${s.map(x=>x.key+'→'+x.tier).join(', ')||'none'}`,'ok');
+  }).catch(e=>alertStatus('Failed: '+e.message,'err'));
+}
+
 function aiInit(){
+  loadAlertEmails();
   $('aiFrom').value = P.meta.maxDate; $('aiTo').value = P.meta.maxDate;
   $('aiFrom').min = P.meta.minDate; $('aiFrom').max = P.meta.maxDate;
   $('aiTo').min = P.meta.minDate; $('aiTo').max = P.meta.maxDate;
@@ -994,10 +911,8 @@ function aiSingle(){ const d=shiftDate(P.meta.maxDate,-1); $('aiFrom').value=d; 
 function rangeAgg(from,to){
   const D=P.daily.filter(r=>r.d>=from&&r.d<=to);
   const dailyNpt={}; P.nptCat.filter(r=>r.d>=from&&r.d<=to).forEach(r=>{dailyNpt[r.d]=(dailyNpt[r.d]||0)+r.m;});
-  const bd={}; let bdMin=0,bdEvt=0;
-  P.nptBd.filter(r=>r.d>=from&&r.d<=to).forEach(r=>{const k=r.s?`${r.c} — ${r.s}`:r.c;bd[k]=bd[k]||{m:0,e:0};bd[k].m+=r.m;bd[k].e+=r.e;bdMin+=r.m;bdEvt+=r.e;});
-  const rtDays=new Set(D.filter(r=>r.r>0).map(r=>r.d));
-  let bdEvtRt=0; P.nptBd.filter(r=>r.d>=from&&r.d<=to&&rtDays.has(r.d)).forEach(r=>bdEvtRt+=r.e);
+  const bd={};
+  P.nptBd.filter(r=>r.d>=from&&r.d<=to).forEach(r=>{const k=r.s?`${r.c} — ${r.s}`:r.c;bd[k]=bd[k]||{m:0,e:0};bd[k].m+=r.m;bd[k].e+=r.e;});
   const cat={}; let nptMin=0;
   P.nptCat.filter(r=>r.d>=from&&r.d<=to).forEach(r=>{cat[r.c]=cat[r.c]||{m:0,e:0};cat[r.c].m+=r.m;cat[r.c].e+=r.e;nptMin+=r.m;});
   let smMin=0,smEvt=0; P.nptCat.filter(r=>r.d>=from&&r.d<=to&&r.c==='Schedule Maintenance').forEach(r=>{smMin+=r.m;smEvt+=r.e;});
@@ -1011,10 +926,9 @@ function rangeAgg(from,to){
   const prodDays=Object.keys(dailyNpt).length||1;
   return {from,to, o, nptMin, nptPct: loadingHrs>0?nptMin/(loadingHrs*60):null, cats:Object.entries(cat).sort((a,b)=>b[1].m-a[1].m).slice(0,8).map(([k,v])=>({name:k,minutes:Math.round(v.m),hours:+(v.m/60).toFixed(1),events:v.e})),
     top5:Object.entries(bd).sort((a,b)=>b[1].m-a[1].m).slice(0,5).map(([k,v])=>({name:k,hours:+(v.m/60).toFixed(1),events:v.e})),
-    mroHrs:+(bdMin/60).toFixed(1), bdEvt, smHrs:+(smMin/60).toFixed(1), smEvt,
+    smHrs:+(smMin/60).toFixed(1), smEvt,
     planTot:pv.planTot, actTot:pv.actTot, planAch:pv.ach!=null?+(pv.ach*100).toFixed(1):null,
-    mohTot, goodMain, domUom:domU.u, runtimeHrs, loadingHrs, prodDays,
-    dailyGoodMainSeries:Object.entries(D.filter(r=>r.u===domU.u).reduce((a,r)=>{a[r.d]=(a[r.d]||0)+r.g;return a;},{})).sort().map(x=>x[1])};
+    mohTot, goodMain, domUom:domU.u, runtimeHrs, loadingHrs, prodDays};
 }
 function makePayload(from,to){
   const days=(Math.round(new Date(to)-new Date(from))/864e5)+1;
@@ -1027,7 +941,6 @@ function makePayload(from,to){
       oee_pct:s.o.OEE!=null?+(s.o.OEE*100).toFixed(1):null, availability_pct:s.o.A!=null?+(s.o.A*100).toFixed(1):null,
       performance_pct:s.o.P!=null?+(s.o.P*100).toFixed(1):null, quality_yield_pct:s.o.Q!=null?+(s.o.Q*100).toFixed(1):null,
       capacity_utilization_pct:s.o.CU!=null?+(s.o.CU*100).toFixed(1):null, npt_pct:s.nptPct!=null?+(s.nptPct*100).toFixed(1):null,
-      mro_downtime_hrs:s.mroHrs, mro_events:s.bdEvt,
       scheduled_maintenance_hrs:s.smHrs, scheduled_maintenance_events:s.smEvt,
       planning_achievement_pct:s.planAch, plan_qty:s.planTot, actual_qty:s.actTot, output_uom:s.domUom,
       moh_cost_bdt:Math.round(s.mohTot), good_output:s.goodMain},
@@ -1039,9 +952,6 @@ function makePayload(from,to){
       npt_pp:delta(s.nptPct!=null?s.nptPct*100:null,p.nptPct!=null?p.nptPct*100:null),
       output_main:Math.round((s.goodMain[0]?s.goodMain[0].q:0)-(p.goodMain[0]?p.goodMain[0].q:0))},
     top_breakdowns:s.top5, npt_categories:s.cats,
-    spc:s.dailyGoodMainSeries.length>4?{mean:+(s.dailyGoodMainSeries.reduce((a,b)=>a+b,0)/s.dailyGoodMainSeries.length).toFixed(0),
-      sigma:+(Math.sqrt(s.dailyGoodMainSeries.reduce((x,v)=>x+(v-s.dailyGoodMainSeries.reduce((a,b)=>a+b,0)/s.dailyGoodMainSeries.length)**2,0)/(s.dailyGoodMainSeries.length-1))).toFixed(0),
-      min:Math.min(...s.dailyGoodMainSeries), max:Math.max(...s.dailyGoodMainSeries), uom:s.domUom}:null,
     runtime_capture_note:'Machine runtime (needed for OEE/Availability/Performance) was captured in MES only from '+(P.meta.rtStart||'n/a')};
   return payload;
 }
@@ -1067,7 +977,7 @@ function generateReport(){
 }
 /* ---- built-in analyst engine: full professional report ---- */
 function buildReport(p){
-  const k=p.kpis, dl=p.deltas, sp=p.spc, pp=p.prev_period_kpis;
+  const k=p.kpis, dl=p.deltas, pp=p.prev_period_kpis;
   const f1=n=>n==null?'—':n.toLocaleString('en-US',{maximumFractionDigits:1});
   const f0=n=>n==null?'—':Math.round(n).toLocaleString('en-US');
   const arr=(v,u='')=>v==null?'—':(v>0?`<span style="color:#c0392b">▲ +${f1(v)}${u}</span>`:v<0?`<span style="color:#1e8e5a">▼ ${f1(v)}${u}</span>`:'— (flat)');
@@ -1082,7 +992,6 @@ function buildReport(p){
   ${tr('Capacity Utilization',k.capacity_utilization_pct!=null?k.capacity_utilization_pct+'%':'—',arr(null),assess(k.capacity_utilization_pct,70,50))}
   ${tr('NPT',k.npt_pct!=null?k.npt_pct+'%':'—',arr(dl.npt_pp,' pp'),assessInv(k.npt_pct,35,50))}
   ${tr('Planning Achievement',k.planning_achievement_pct!=null?k.planning_achievement_pct+'%':'—','—',assess(k.planning_achievement_pct,95,85))}
-  ${tr('MRO Downtime',f0(k.mro_downtime_hrs)+' h','—',k.mro_events+' events')}
   ${tr('Scheduled Maintenance',f0(k.scheduled_maintenance_hrs)+' h','—',k.scheduled_maintenance_events+' events')}
   ${tr('MOH Cost',k.moh_cost_bdt?'৳'+f0(k.moh_cost_bdt):'—','—',k.moh_cost_bdt?'booked':'no bookings')}
   </table>`;
@@ -1102,10 +1011,8 @@ function buildReport(p){
     if(uo) R.push(`${uo.name} is an order/despatch-side loss (${uo.hours} h) — align production scheduling with DO flow and silo/warehouse release to convert idle loading time into productive time; this is not a maintenance problem.`);
     else R.push(`NPT at ${k.npt_pct}% is high — run a loss-tree workshop on the top 3 categories and set monthly reduction targets (aim −5 pp).`); }
   if(k.performance_pct!=null&&k.performance_pct<70) R.push(`Performance at ${k.performance_pct}%: verify packer/VRM set-points vs rated capacity, reduce micro-stops, and review numCapacityPerHr master data for packers (target P ≥ 85%).`);
-  if(k.scheduled_maintenance_hrs!=null&&k.scheduled_maintenance_hrs===0&&k.mro_downtime_hrs>0) R.push(`Zero scheduled-maintenance hours logged against ${k.mro_downtime_hrs} h unplanned MRO — restore PM calendar compliance and log planned work in MES to shift the planned/unplanned ratio toward ≥70/30.`);
   if(k.planning_achievement_pct!=null&&k.planning_achievement_pct<95) R.push(`Close the ${f1(100-k.planning_achievement_pct)} pp plan gap: lock weekly production plan freeze, monitor daily plan adherence, and trigger RCA on >5% variance days.`);
   if(k.capacity_utilization_pct!=null&&k.capacity_utilization_pct<40) R.push(`Capacity utilization only ${k.capacity_utilization_pct}% — evaluate order book, shift loading and demand smoothing; significant fixed-cost dilution opportunity.`);
-  if(sp) R.push(`SPC: daily output σ=${f0(sp.sigma)} ${sp.uom||''} (±${((sp.sigma*3/(sp.mean||1))*100).toFixed(1)}% at ±3σ) — tighten shift handover, feed/material quality and changeover discipline to cut variation.`);
   if(!R.length) R.push('Sustain current performance; extend runtime-capture data quality and keep monthly RCA reviews.');
   /* sections */
   return `<h2>${p.company} — Performance Analysis (${p.period.from} → ${p.period.to})</h2>
@@ -1114,8 +1021,8 @@ function buildReport(p){
   <h2>OEE &amp; Capacity Commentary</h2><p>${k.oee_pct!=null?`OEE ${k.oee_pct}% decomposes into Availability ${k.availability_pct??'—'}%, Performance ${k.performance_pct??'—'}% and Quality ${k.quality_yield_pct??'—'}%. ${k.performance_pct!=null&&k.performance_pct<70?'Performance is the biggest drag — machine speeds/set-points vs rated capacity need verification.':''} ${k.availability_pct!=null&&k.availability_pct<80?'Availability losses point to stoppages — cross-check NPT categories below.':''}`:`Machine runtime (required for OEE/Availability/Performance) is captured in MES for this plant only from ${p.rt_start||'recently'}; for this range those metrics are marked '—' as data-unavailable, not as poor performance.`} Capacity utilization at ${k.capacity_utilization_pct??'—'}% of rated nameplate across ${p.period.days} day(s).</p>
   <h2>Losses &amp; Breakdown Analysis</h2><p>Top 5 unplanned downtime sources:</p><ol>${p.top_breakdowns.map(b=>`<li><b>${b.name}</b> — ${b.hours} h / ${b.events} events</li>`).join('')||'<li>No breakdown events logged</li>'}</ol>
   <p>NPT categories: ${p.npt_categories.map(c=>`${c.name} ${c.hours} h`).join(' · ')||'none logged'}.</p>
-  <h2>Maintenance Effectiveness</h2><p>MRO (unplanned) ${f0(k.mro_downtime_hrs)} h vs Scheduled ${f0(k.scheduled_maintenance_hrs)} h. ${k.mro_events} unplanned events in period. ${(k.scheduled_maintenance_hrs+k.mro_downtime_hrs)>0?`Planned share of maintenance downtime: <b>${Math.round(k.scheduled_maintenance_hrs/(k.scheduled_maintenance_hrs+k.mro_downtime_hrs)*100)}%</b> (world-class ≥ 70%).`:''}</p>
-  <h2>Planning &amp; Output</h2><p>Good output: ${k.good_output&&k.good_output.length?k.good_output.map(g=>`<b>${f0(g.q)} ${g.u}</b>`).join(' + '):'no output recorded'}. ${k.planning_achievement_pct!=null?`Planning achievement <b>${k.planning_achievement_pct}%</b> against ${f0(k.plan_qty)} planned ${k.output_uom||''}.`:'No production plan loaded for this range.'} ${sp?`Daily output ranged ${f0(sp.min)}–${f0(sp.max)} ${sp.uom||''} (mean ${f0(sp.mean)}, σ ${f0(sp.sigma)}).`:''}</p>
+  <h2>Maintenance Effectiveness</h2><p>Scheduled maintenance ${f0(k.scheduled_maintenance_hrs)} h (${k.scheduled_maintenance_events} planned events) in period. ${k.scheduled_maintenance_hrs>0?`Scheduled maintenance logged — PM calendar compliance.`:''}</p>
+  <h2>Planning &amp; Output</h2><p>Good output: ${k.good_output&&k.good_output.length?k.good_output.map(g=>`<b>${f0(g.q)} ${g.u}</b>`).join(' + '):'no output recorded'}. ${k.planning_achievement_pct!=null?`Planning achievement <b>${k.planning_achievement_pct}%</b> against ${f0(k.plan_qty)} planned ${k.output_uom||''}.`:'No production plan loaded for this range.'}</p>
   <h2>Recommendations</h2><ol>${R.map(r=>`<li>${r}</li>`).join('')}</ol>
   <p style="color:#777;font-size:11px;margin-top:14px">Source: ${p.company} DWH (MES OEE/NPT, production planning, HRMS OT, production costing) · Analysis: built-in analyst engine · ${new Date().toLocaleString()}</p>`;
 }

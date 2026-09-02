@@ -9,5 +9,8 @@
     { "src": "/mcpfy.json", "dest": "/mcpfy.json" },
     { "src": "/api/(.*)", "dest": "/api/$1" },
     { "src": "/(.*)", "dest": "/index.html" }
+  ],
+  "crons": [
+    { "path": "/api/alert-check", "schedule": "0 16 * * *" }
   ]
 }
