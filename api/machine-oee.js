@@ -31,7 +31,7 @@ module.exports = async (req, res) => {
       FROM mes.tblOeeProdWasteHeader
       WHERE intBusinessUnitId=${bu} AND ${machineCond} AND dteProductionDate >= '${from}' AND dteProductionDate <= '${to}'
       GROUP BY CONVERT(varchar(10), dteProductionDate,23), strMachineName, strUOMName ORDER BY d`;
-    const rows = await callMCP('mes', 'ExecuteReadOnlyQueryAsync', { sqlQuery: sql });
+    const rows = await callMCP('mes', 'ExecuteReadOnlyQueryAsync', { sqlQuery: sql, limit: 2000 });
     const r = rows.map(x => ({ d:x.d, m:x.m, u:x.u, l:num(x.l), run:num(x.run), a:num(x.a), g:num(x.g), cr:num(x.cr), cs:num(x.cs) }));
     const machines=[...new Set(r.map(x=>x.m))];
     const mmap={}; r.forEach(x=>{ const k=x.d+'|'+x.m; mmap[k]=mmap[k]||[]; mmap[k].push(x); });

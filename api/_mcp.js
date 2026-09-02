@@ -24,7 +24,10 @@ function parseMdTable(md) {
   const headers = [];
   for (const line of lines) {
     if (line.includes('---') || !line.includes('|')) continue;
-    const cells = line.split('|').map(c => c.trim()).filter(Boolean);
+    // split on |, keep interior empties; drop the empty cells from leading/trailing pipes
+    const cells = line.split('|').map(c => c.trim());
+    if (cells[0] === '') cells.shift();
+    if (cells[cells.length-1] === '') cells.pop();
     if (!cells.length) continue;
     if (!headers.length) { headers.push(...cells); continue; }
     if (cells.length >= headers.length) {
