@@ -218,6 +218,9 @@ tr:last-child td{border-bottom:none}
       <tr><th>SBU</th><th>Plant Head (1st)</th><th>HOB / CEO (2nd)</th><th>Deputy COO (3rd+)</th></tr>
     </thead><tbody></tbody></table></div>
     <div class="em-row" style="margin-top:12px">
+      <span id="alertToggleBadge" class="badge b-green" style="margin-right:6px">● ON</span>
+      <button class="btn" id="btnAlertStop" onclick="setAlertEnabled(false)">⏹ Stop Alerts</button>
+      <button class="btn" id="btnAlertResume" onclick="setAlertEnabled(true)">▶ Resume Alerts</button>
       <button class="btn ghost" onclick="toggleAlertEdit()">✏️ Edit Alert Recipients</button>
       <button class="btn" onclick="saveAlertEmails()">💾 Save Alert Recipients</button>
       <button class="btn ghost" onclick="runAlertCheck()">▶ Run Alert Check (test)</button>
@@ -817,12 +820,24 @@ function aiStatus(msg, cls){ const el=$('aiStatus'); el.innerHTML=`<span class="
 function emStatusMsg(msg, cls){ const el=$('emStatus'); el.innerHTML=`<span class="${cls||'wait'}">${msg}</span>`; }
 
 /* ---------- Alert email recipients (threshold alerts) ---------- */
-let alertCfg=null, alertEditOn=false;
+let alertCfg=null, alertEditOn=false, alertsEnabled=true;
 function alertStatus(msg, cls){ const el=$('alertStatus'); if(el) el.innerHTML=`<span class="${cls||'wait'}">${msg}</span>`; }
+function renderAlertToggle(){
+  const badge=$('alertToggleBadge'); const stop=$('btnAlertStop'); const resume=$('btnAlertResume');
+  if(badge){ badge.className='badge '+(alertsEnabled?'b-green':'b-red'); badge.textContent=alertsEnabled?'● ON':'● STOPPED'; }
+  if(stop) stop.style.opacity = alertsEnabled?'1':'.5';
+  if(resume) resume.style.opacity = alertsEnabled?'.5':'1';
+}
+function setAlertEnabled(enabled){
+  fetch(`${API}/api/alert-toggle`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}).then(r=>r.json()).then(d=>{
+    alertsEnabled=!!d.alertsEnabled; renderAlertToggle();
+    alertStatus(alertsEnabled?'Alert emails RESUMED ✔':'Alert emails STOPPED ⏹','ok');
+  }).catch(e=>alertStatus('Toggle failed: '+e.message,'err'));
+}
 function loadAlertEmails(){
   fetch(`${API}/api/alert-emails`).then(r=>r.json()).then(d=>{
-    alertCfg=d.config||{}; renderAlertTable();
-    if($('alertEmailsNote')) $('alertEmailsNote').textContent=`Recipients loaded · escalation state: count=${Object.keys(d.state&&d.state.counts||{}).length} SBU · date ${d.state||''?'':''} `;
+    alertCfg=d.config||{}; alertsEnabled = d.alertsEnabled!==false; renderAlertToggle(); renderAlertTable();
+    if($('alertEmailsNote')) $('alertEmailsNote').textContent=`Recipients loaded · escalation state: count=${Object.keys(d.state&&d.state.counts||{}).length} SBU `;
   }).catch(e=>{ if($('alertEmailsNote')) $('alertEmailsNote').textContent='Failed to load alert recipients: '+e.message; });
 }
 function renderAlertTable(){

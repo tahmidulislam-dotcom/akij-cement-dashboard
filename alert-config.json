@@ -1,0 +1,147 @@
+{
+  "accl": {
+    "name": "Akij Cement Ltd",
+    "plant_head": [
+      "planthead@akijcement.com"
+    ],
+    "hob_ceo": [
+      "hob@akijcement.com"
+    ]
+  },
+  "apfil": {
+    "name": "Akij Poly Fiber Industries",
+    "plant_head": [
+      "badrul.apfil@akijpolyfibre.com"
+    ],
+    "hob_ceo": [
+      "badrul.apfil@akijpolyfibre.com"
+    ]
+  },
+  "ail": {
+    "name": "Akij Ispat Limited",
+    "plant_head": [
+      "jubair@akijispat.com"
+    ],
+    "hob_ceo": [
+      "ceo.ail@akijispat.com"
+    ]
+  },
+  "aafl": {
+    "name": "Akij Agro Feed Limited",
+    "plant_head": [
+      "headofplant3@akijagrofeed.com"
+    ],
+    "hob_ceo": [
+      "ceo.aafl@akijagrofeed.com"
+    ]
+  },
+  "aelflour": {
+    "name": "Akij Essentials Limited",
+    "plant_head": [
+      "ariful05@akijresource.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "aeldal": {
+    "name": "Akij Essentials Limited (Dal)",
+    "plant_head": [
+      "ariful05@akijresource.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "hrml": {
+    "name": "Hashem Rice Mills Limited",
+    "plant_head": [
+      "kamruzzaman@akijessential.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "fal": {
+    "name": "Fariq Agro Limited",
+    "plant_head": [
+      "kamruzzaman@akijessential.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "absl": {
+    "name": "Akij Building Solutions Ltd",
+    "plant_head": [
+      "headofplant3@akijagrofeed.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "apfil2": {
+    "name": "Akij Poly Fiber Industries",
+    "plant_head": [
+      "badrul.apfil@akijpolyfibre.com"
+    ],
+    "hob_ceo": [
+      "badrul.apfil@akijpolyfibre.com"
+    ]
+  },
+  "armcl-ngnj": {
+    "name": "ARMCL Narayanganj",
+    "plant_head": [
+      "headofplant3@akijagrofeed.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "armcl-dhour": {
+    "name": "ARMCL Dhour",
+    "plant_head": [
+      "headofplant3@akijagrofeed.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "armcl-rup": {
+    "name": "ARMCL Rupganj",
+    "plant_head": [
+      "headofplant3@akijagrofeed.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "armcl-ctg": {
+    "name": "ARMCL Chittagong",
+    "plant_head": [
+      "headofplant3@akijagrofeed.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "armcl-gaz": {
+    "name": "ARMCL Gazipur",
+    "plant_head": [
+      "headofplant3@akijagrofeed.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "alel": {
+    "name": "Akij Light Engineering Ltd",
+    "plant_head": [
+      "headofplant3@akijagrofeed.com"
+    ],
+    "hob_ceo": [
+      "coo.ael@akijessential.com"
+    ]
+  },
+  "alertsEnabled": true
+}

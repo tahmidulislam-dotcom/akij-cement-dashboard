@@ -24,7 +24,7 @@ const sanitize = h => String(h).replace(/<script[\s\S]*?<\/script>/gi, '').repla
 const validEmail = e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
 
 /* ---------- Alert email config + daily escalation state ---------- */
-const loadAlertCfg = () => { try { return JSON.parse(fs.readFileSync(ALERT_CFG, 'utf8')); } catch { return JSON.parse(JSON.stringify(alertEngine.defaultConfig)); } };
+const loadAlertCfg = () => { try { const c = JSON.parse(fs.readFileSync(ALERT_CFG, 'utf8')); if (c.alertsEnabled == null) c.alertsEnabled = true; return c; } catch { const c = JSON.parse(JSON.stringify(alertEngine.defaultConfig)); c.alertsEnabled = true; return c; } };
 const saveAlertCfg = c => fs.writeFileSync(ALERT_CFG, JSON.stringify(c, null, 2));
 const loadAlertState = () => { try { return JSON.parse(fs.readFileSync(ALERT_STATE, 'utf8')); } catch { return { date: '', counts: {} }; } };
 const saveAlertState = s => fs.writeFileSync(ALERT_STATE, JSON.stringify(s, null, 2));
@@ -147,7 +147,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/alert-emails' && req.method === 'GET') {
       const cfg = loadAlertCfg();
       const state = loadAlertState();
-      return json(res, 200, { config: cfg, state, deputy: cfg._deputy || 'deputy.coo@akijresource.com' });
+      return json(res, 200, { config: cfg, state, deputy: cfg._deputy || 'deputy.coo@akijresource.com', alertsEnabled: cfg.alertsEnabled !== false });
     }
     if (url.pathname === '/api/alert-emails' && req.method === 'POST') {
       const b = await readBody(req);
@@ -165,6 +165,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/alert-check' && req.method === 'POST') {
       try {
+        const cfg0 = loadAlertCfg();
+        if (cfg0.alertsEnabled === false) return json(res, 200, { disabled: true, msg: 'Alert emails are STOPPED — use Resume to enable' });
         // Rebuild live DATA (same path as /api/data?live=1) then evaluate + escalate
         const html = fs.readFileSync(DASH, 'utf8');
         const m = html.match(/(?:const|let) DATA = (\{[\s\S]*?\});\s*\n?\s*(?:const |let |function |document\.)/);
@@ -172,12 +174,19 @@ const server = http.createServer(async (req, res) => {
         // reuse the /api/data live-merge by fetching our own endpoint
         const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
         if (r.ok) { const j = await r.json(); if (j && j.plants) live = j; }
-        const cfg = loadAlertCfg();
+        const cfg = cfg0;
         const state = loadAlertState();
         const reslt = await alertEngine.evaluateAll(live, cfg, state, async (to, subject, htmlBody) => { return await gmailSend(to, subject, htmlBody); });
         saveAlertState(reslt.state);
         return json(res, 200, reslt);
       } catch (e) { return json(res, 500, { error: e.message }); }
+    }
+    if (url.pathname === '/api/alert-toggle' && req.method === 'POST') {
+      const b = await readBody(req);
+      const cfg = loadAlertCfg();
+      cfg.alertsEnabled = !!b.enabled;
+      saveAlertCfg(cfg);
+      return json(res, 200, { ok: true, alertsEnabled: cfg.alertsEnabled });
     }
     if (url.pathname === '/api/analyze' && req.method === 'POST') {
       const b = await readBody(req);

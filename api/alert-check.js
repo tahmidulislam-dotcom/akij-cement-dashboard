@@ -31,6 +31,8 @@ module.exports = async (req, res) => {
     let cfg;
     const fs = require('fs');
     try { cfg = JSON.parse(fs.readFileSync('/tmp/alert-config.json','utf8')); } catch { cfg = JSON.parse(JSON.stringify(alertEngine.defaultConfig)); cfg._deputy = process.env.ALERT_DEPUTY || 'deputy.coo@akijresource.com'; }
+    if (cfg.alertsEnabled == null) cfg.alertsEnabled = true;
+    if (cfg.alertsEnabled === false) return res.status(200).json({ disabled: true, msg: 'Alert emails are STOPPED — use Resume to enable' });
     let state;
     try { state = JSON.parse(fs.readFileSync('/tmp/alert-state.json','utf8')); } catch { state = { date:'', counts:{} }; }
 
