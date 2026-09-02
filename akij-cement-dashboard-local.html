@@ -323,17 +323,17 @@ async function fetchLiveData(){
   const liveEl=document.querySelector('.live');
   if(typeof fetch==='undefined') return false;
   try{
-    const r=await fetch(`${API}/api/data`,{cache:'no-store'});
+    const r=await fetch(`${API}/api/data?live=1`,{cache:'no-store'});
     if(!r.ok) throw new Error(''+r.status);
     const live=await r.json();
     if(live && live.plants && live.order && live.generated){
       DATA=live;
-      if(liveEl) liveEl.textContent='● LIVE MCP DATA — '+live.generated;
+      if(liveEl) liveEl.textContent='● LIVE iBOSDD DATA — '+live.generated;
       return true;
     }
   }catch(e){
     console.warn('live MCP fetch failed, using embedded snapshot',e.message);
-    if(liveEl) liveEl.textContent='● LIVE MCP DATA — '+DATA.generated+' (cached)';
+    if(liveEl) liveEl.textContent='● LIVE iBOSDD DATA — '+DATA.generated+' (cached)';
     // keep using embedded DATA silently — not an error for user
   }
   return false;
@@ -401,7 +401,7 @@ async function init(){
 function setPlant(key){
   PLANT=key; P=DATA.plants[key];
   $('hdrPlant').textContent=P.meta.name;
-  $('hdrSub').innerHTML=`${P.meta.plants.length?P.meta.plants.join(' · '):'No plant-level MES data'} &nbsp;|&nbsp; Source: DWH (MSSQL) — MES · HRMS &nbsp;|&nbsp; Generated: ${DATA.generated}`;
+  $('hdrSub').innerHTML=`${P.meta.plants.length?P.meta.plants.join(' · '):'No plant-level MES data'} &nbsp;|&nbsp; Source: iBOSDD (MCP) — MES · Finance · HRMS &nbsp;|&nbsp; Generated: ${DATA.generated}`;
   const dhakaToday=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
   const maxAllowed = dhakaToday > P.meta.maxDate ? dhakaToday : P.meta.maxDate;
   ['fromDate','toDate','aiFrom','aiTo'].forEach(id=>{ $(id).min=P.meta.minDate; $(id).max=maxAllowed; });

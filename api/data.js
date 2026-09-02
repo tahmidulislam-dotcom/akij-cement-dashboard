@@ -1,4 +1,4 @@
-/* api/data.js — serve the embedded dashboard DATA, optionally merged with latest iBOSDD (via MCP) */
+/* api/data.js — serve the embedded dashboard DATA, merged with latest iBOSDD (MCP) + per-SBU MOH from Finance */
 const fs = require('fs');
 const path = require('path');
 const { callMCP } = require('./_mcp.js');
@@ -11,6 +11,25 @@ const norm = alias => `LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(${alias}, CHAR(9), ''
 const plantIn = (p, alias) => p.plants.length ? `${norm(alias||'strPlantName')} IN (${p.plants.map(x=>`'${esc(x)}'`).join(',')})` : '1=0';
 const num = s => { const n = parseFloat(String(s||'').replace(/,/g,'')); return isNaN(n) ? 0 : n; };
 
+// Per-SBU Manufacturing Overhead: Profit Centers (exact iBOSDD names), Income-Statement rows only (deduped)
+const MOH_PCTER = {
+  accl:         { bu:4,   pcs:['Akij Cement Company Ltd.'] },
+  'armcl-ngnj': { bu:175, pcs:['ARMCL-Narayanganj'] },
+  'armcl-dhour':{ bu:175, pcs:['ARMCL-Dhour'] },
+  'armcl-rup':  { bu:175, pcs:['ARMCL-Rupganj'] },
+  'armcl-gaz':  { bu:175, pcs:['ARMCL-Gazipur'] },
+  'armcl-ctg':  { bu:175, pcs:['ARMCL- Chittagong'] },
+  apfil:        { bu:8,   pcs:['Akij Poly Fibre Industries Ltd.'] },
+  aafl:         { bu:232, pcs:['Akij Agro Feed Ltd.'] },
+  absl:         { bu:220, pcs:['Akij Building Solutions Limited'] },
+  alel:         { bu:237, pcs:['Akij Light Engineering Limited'] },
+  aelflour:     { bu:144, pcs:['Flour (Bulk)','Flour (Consumer)','Lentil (Bulk Manufacture)','Checkpeas (Bulk Manufacture)','Yellow Peas (bulk manufacture)','Lentil (consumer)','Oil (Consumer)'] },
+  aeldal:       { bu:144, pcs:[] },
+  hrml:         { bu:188, pcs:['Rice (Manufacturing Bulk)','Rice (Manufacturing Consumer)','Rice (Manufacturing Export)','Rice (Tender & Others)','Tender (Navy)'] },
+  fal:          { bu:189, pcs:['Rice (Manufacturing)'] },
+  ail:          { bu:224, pcs:['AIL-Billet','AIL-Rod'] },
+};
+
 function loadEmbedded() {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const m = html.match(/(?:const|let) DATA = (\{[\s\S]*?\});\s*\n?\s*(?:const |let |function |document\.)/);
@@ -20,6 +39,40 @@ function loadEmbedded() {
 async function latestLiveDatas() {
   const rows = await callMCP('mes', 'ExecuteReadOnlyQueryAsync', { sqlQuery: `SELECT CONVERT(varchar(10), MAX(dteProductionDate), 23) mx FROM mes.tblOeeProdWasteHeader` });
   return rows[0] ? rows[0].mx : null;
+}
+
+// Inject per-SBU MOH for the current month from iBOSDD Finance (Profit Center, Income Statement only)
+async function injectMOH(live) {
+  const to = '2026-08-31', from = '2026-08-01';
+  for (const [key, cfg] of Object.entries(MOH_PCTER)) {
+    const t = live.plants?.[key]; if (!t) continue;
+    t.moh = t.moh || [];
+    let row = t.moh.find(x => x.k === '2026-08');
+    try {
+      let total = null;
+      if (cfg.pcs && cfg.pcs.length) {
+        const list = cfg.pcs.map(x => `'${esc(x)}'`).join(',');
+        const rows = await callMCP('finance', 'ExecuteReadOnlyQueryAsync', { sqlQuery:
+          `SELECT SUM(numAmount) amt FROM fin.qryAccountingJournal WHERE dteTransactionDate >= '${from}' AND dteTransactionDate <= '${to}' AND strType='Income Statement' AND strGeneralLedgerName LIKE '%Manufactur%' AND strProfitCenterName IN (${list})` });
+        const amt = rows[0] && rows[0].amt != null ? parseFloat(String(rows[0].amt).replace(/,/g,'')) : null;
+        if (amt != null && isFinite(amt)) total = amt;
+      }
+      if (total == null) {
+        const rows = await callMCP('finance', 'ExecuteReadOnlyQueryAsync', { sqlQuery:
+          `SELECT SUM(numAmount) amt FROM fin.qryAccountingJournal WHERE dteTransactionDate >= '${from}' AND dteTransactionDate <= '${to}' AND strType='Income Statement' AND strGeneralLedgerName LIKE '%Manufactur%' AND intBusinessUnitId=${cfg.bu}` });
+        const amt = rows[0] && rows[0].amt != null ? parseFloat(String(rows[0].amt).replace(/,/g,'')) : null;
+        if (amt != null && isFinite(amt)) total = amt;
+      }
+      if (total != null && isFinite(total)) {
+        if (!row) { row = { k:'2026-08', mat:0, q:0 }; t.moh.push(row); }
+        row.c = Math.round(Math.abs(total)*100)/100;
+        row.gross = row.c;
+        row.source = 'Finance sub-schedule (MOH, GL 4010001) · Income Statement only';
+        t.moh.sort((a,b)=>a.k<b.k?-1:1);
+      }
+    } catch (e) { /* skip on MCP error */ }
+  }
+  return live;
 }
 
 async function mergeLive(live) {
@@ -60,12 +113,11 @@ module.exports = async (req, res) => {
     const live = loadEmbedded();
     const wantLive = req.query.live === '1';
     const plant = req.query.plant;
-    if (wantLive) {
-      const merged = await mergeLive(live);
-      if (plant) { const p = merged.plants?.[plant]; if (!p) return res.status(404).json({error:`Plant ${plant} not found`, available: merged.order}); return res.status(200).json({plant:p, meta:p.meta, generated:merged.generated}); }
-      return res.status(200).json(merged);
-    }
-    if (plant) { const p = live.plants?.[plant]; if (!p) return res.status(404).json({error:`Plant ${plant} not found`, available: live.order}); return res.status(200).json({plant:p, meta:p.meta, generated:live.generated}); }
-    return res.status(200).json(live);
+    let data = live;
+    if (wantLive) data = await mergeLive(live);
+    let out;
+    try { out = await injectMOH(data); } catch { out = data; }
+    if (plant) { const p = out.plants?.[plant]; if (!p) return res.status(404).json({error:`Plant ${plant} not found`, available: out.order}); return res.status(200).json({plant:p, meta:p.meta, generated:out.generated}); }
+    return res.status(200).json(out);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 };
