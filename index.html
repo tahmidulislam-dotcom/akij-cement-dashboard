@@ -163,13 +163,6 @@ tr:last-child td{border-bottom:none}
     <div class="ch tall"><canvas id="chSpc"></canvas></div>
   </div>
 
-  <!-- Overtime -->
-  <div class="panel c6">
-    <h3>Overtime</h3>
-    <div class="note">OT hours &amp; entries vs month (HRMS)</div>
-    <div class="ch"><canvas id="chOt"></canvas></div>
-  </div>
-
   <!-- MRO -->
   <div class="panel c6">
     <h3>MRO — Maintenance Repair &amp; Overhaul Downtime</h3>
@@ -691,10 +684,6 @@ function render(){
     smMin+=r.m; smEvt+=r.e; const b=ym(r.d); smM[b]=smM[b]||{m:0,e:0}; smM[b].m+=r.m; smM[b].e+=r.e;
   });
 
-  /* ---- Overtime ---- */
-  let otH=0, otE=0; const otM={};
-  P.ot.filter(r=>inRange(r.d)).forEach(r=>{ otH+=r.h; otE+=r.e; const b=ym(r.d); otM[b]=otM[b]||{h:0,e:0}; otM[b].h+=r.h; otM[b].e+=r.e; });
-
   /* ---- Plan vs Actual (dominant UoM, monthly) ---- */
   const pvCard=planVsActual(FROM,TO);
   const domUom=pvCard.domUom;
@@ -733,7 +722,6 @@ function render(){
     {l:'Yield', v:pct(agg.Q), s:(uSt.slice(0,2).map(x=>`${x.u} ${pct(x.y,1)}`).join(' · ')||'—')+tgtLine(tYld,true), ac:'var(--green)'},
     {l:'Planning Achievement', v:pct(planAch), s:`${fmt(actTot,0)} vs ${fmt(planTot,0)} ${domUom||''} planned${pvCard.coverage<0.95?` · ${(pvCard.coverage*100).toFixed(0)}% UoM-matched`:''}`, ac:'var(--amber)'},
     {l:'MRO Downtime', v:fmt(bdMin/60,0)+' h', s:`${bdEvt} unplanned maint. events`, ac:'var(--pink)'},
-    {l:'Overtime', v:fmt(otH,0)+' h', s:`${fmt(otE,0)} OT entries`, ac:'var(--amber)'},
     {l:'Scheduled Maintenance', v:fmt(smMin/60,0)+' h', s:`${smEvt} planned events`, ac:'var(--blue)'},
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},
     {l:'Good Output', v:uSt[0]?fmt(uSt[0].q,0):'—', s:(uSt[0]?`${uSt[0].u}${uSt[1]?` · ${fmt(uSt[1].q,0)} ${uSt[1].u}`:''}`:'No output in range')+(tProdDay!=null?`<div style="margin-top:5px;color:var(--pink);font-weight:700">Target ${fmt(tProdDay,0)}/day</div>`:''), ac:'var(--teal)'},
@@ -835,15 +823,6 @@ function render(){
 
   /* ---- MRO ---- */
   const bdM={}; P.nptBd.filter(r=>inRange(r.d)).forEach(r=>{const b=bucket(r.d); bdM[b]=bdM[b]||{m:0,e:0}; bdM[b].m+=r.m; bdM[b].e+=r.e;});
-
-  /* ---- Overtime ---- */
-  const otBk={}; P.ot.filter(r=>inRange(r.d)).forEach(r=>{const b=bucket(r.d); otBk[b]=otBk[b]||{h:0,e:0}; otBk[b].h+=r.h; otBk[b].e+=r.e;});
-  charts.ot=new Chart($('chOt'),{data:{labels:bk,datasets:[
-    {type:'bar',label:'OT Hours',data:bk.map(b=>otBk[b]?otBk[b].h:null),backgroundColor:'rgba(251,191,36,.7)',borderRadius:5},
-    {type:'line',label:'OT Entries',data:bk.map(b=>otBk[b]?otBk[b].e:null),borderColor:'#f472b6',yAxisID:'y1',tension:.3,borderWidth:2,pointRadius:2},
-  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
-    plugins:{legend:{position:'top',...legendOpt},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y,0)}`}}},
-    scales:{y:{...gridOpt},y1:{position:'right',grid:{drawOnChartArea:false}},x:gridOpt}}});
 
   /* ---- MRO ---- */
   charts.mro=new Chart($('chMro'),{data:{labels:bk,datasets:[
@@ -954,8 +933,8 @@ function render(){
   Capacity Utilization = Actual ÷ (Rated Capacity/hr × Shift Duration) · NPT% = NPT minutes ÷ Loading minutes · Planning Achievement = Actual ÷ Planned good output (prorated for partial months, UoM-matched) ·
   MRO = unplanned maintenance downtime · MOH = manufacturing overhead booked to production orders (BDT).
   ${P.meta.rtStart?`Machine runtime capture in MES for this plant began <b>${P.meta.rtStart}</b> — OEE, Availability &amp; Performance are unavailable ('—') for earlier periods; other KPIs remain valid for the full history.`:''}
-  <br><b>Data sources —</b> mes.tblOeeProdWasteHeaderArc / tblNPTRowArc / tblProductionPlanningRowArc / tblRCAAPArc · mes production orders (MOH) · saas.timeEmpOverTimeArc · Plant: <b>${P.meta.name}</b>, extracted ${DATA.generated}.
-  Overtime &amp; MOH are recorded at company (business-unit) level — for multi-plant companies (ARMCL, Akij Essentials) these figures span all their plants.`;
+  <br><b>Data sources —</b> mes.tblOeeProdWasteHeaderArc / tblNPTRowArc / tblProductionPlanningRowArc / tblRCAAPArc · mes production orders (MOH) · Plant: <b>${P.meta.name}</b>, extracted ${DATA.generated}.
+  MOH is recorded at company (business-unit) level — for multi-plant companies (ARMCL, Akij Essentials) these figures span all their plants.`;
 }
 
 document.addEventListener('DOMContentLoaded', init);
@@ -1021,7 +1000,6 @@ function rangeAgg(from,to){
   let bdEvtRt=0; P.nptBd.filter(r=>r.d>=from&&r.d<=to&&rtDays.has(r.d)).forEach(r=>bdEvtRt+=r.e);
   const cat={}; let nptMin=0;
   P.nptCat.filter(r=>r.d>=from&&r.d<=to).forEach(r=>{cat[r.c]=cat[r.c]||{m:0,e:0};cat[r.c].m+=r.m;cat[r.c].e+=r.e;nptMin+=r.m;});
-  let otH=0,otE=0; P.ot.filter(r=>r.d>=from&&r.d<=to).forEach(r=>{otH+=r.h;otE+=r.e;});
   let smMin=0,smEvt=0; P.nptCat.filter(r=>r.d>=from&&r.d<=to&&r.c==='Schedule Maintenance').forEach(r=>{smMin+=r.m;smEvt+=r.e;});
   const pv=planVsActual(from,to);
   let mohTot=0; P.moh.filter(m=>m.k>=from.slice(0,7)&&m.k<=to.slice(0,7)).forEach(m=>mohTot+=m.c);
@@ -1034,7 +1012,7 @@ function rangeAgg(from,to){
   return {from,to, o, nptMin, nptPct: loadingHrs>0?nptMin/(loadingHrs*60):null, cats:Object.entries(cat).sort((a,b)=>b[1].m-a[1].m).slice(0,8).map(([k,v])=>({name:k,minutes:Math.round(v.m),hours:+(v.m/60).toFixed(1),events:v.e})),
     top5:Object.entries(bd).sort((a,b)=>b[1].m-a[1].m).slice(0,5).map(([k,v])=>({name:k,hours:+(v.m/60).toFixed(1),events:v.e})),
     mroHrs:+(bdMin/60).toFixed(1), bdEvt, smHrs:+(smMin/60).toFixed(1), smEvt,
-    otHrs:+otH.toFixed(0), otEntries:otE, planTot:pv.planTot, actTot:pv.actTot, planAch:pv.ach!=null?+(pv.ach*100).toFixed(1):null,
+    planTot:pv.planTot, actTot:pv.actTot, planAch:pv.ach!=null?+(pv.ach*100).toFixed(1):null,
     mohTot, goodMain, domUom:domU.u, runtimeHrs, loadingHrs, prodDays,
     dailyGoodMainSeries:Object.entries(D.filter(r=>r.u===domU.u).reduce((a,r)=>{a[r.d]=(a[r.d]||0)+r.g;return a;},{})).sort().map(x=>x[1])};
 }
@@ -1051,16 +1029,15 @@ function makePayload(from,to){
       capacity_utilization_pct:s.o.CU!=null?+(s.o.CU*100).toFixed(1):null, npt_pct:s.nptPct!=null?+(s.nptPct*100).toFixed(1):null,
       mro_downtime_hrs:s.mroHrs, mro_events:s.bdEvt,
       scheduled_maintenance_hrs:s.smHrs, scheduled_maintenance_events:s.smEvt,
-      overtime_hrs:s.otHrs, overtime_entries:s.otEntries,
       planning_achievement_pct:s.planAch, plan_qty:s.planTot, actual_qty:s.actTot, output_uom:s.domUom,
       moh_cost_bdt:Math.round(s.mohTot), good_output:s.goodMain},
     prev_period_kpis:{from:prevFrom,to:prevTo,
       oee_pct:p.o.OEE!=null?+(p.o.OEE*100).toFixed(1):null, npt_pct:p.nptPct!=null?+(p.nptPct*100).toFixed(1):null,
       capacity_utilization_pct:p.o.CU!=null?+(p.o.CU*100).toFixed(1):null,
-      planning_achievement_pct:p.planAch, overtime_hrs:p.otHrs, good_output:p.goodMain},
+      planning_achievement_pct:p.planAch, good_output:p.goodMain},
     deltas:{oee_pp:delta(s.o.OEE!=null?s.o.OEE*100:null,p.o.OEE!=null?p.o.OEE*100:null),
       npt_pp:delta(s.nptPct!=null?s.nptPct*100:null,p.nptPct!=null?p.nptPct*100:null),
-      output_main:Math.round((s.goodMain[0]?s.goodMain[0].q:0)-(p.goodMain[0]?p.goodMain[0].q:0)), overtime_hrs:Math.round(s.otHrs-p.otHrs)},
+      output_main:Math.round((s.goodMain[0]?s.goodMain[0].q:0)-(p.goodMain[0]?p.goodMain[0].q:0))},
     top_breakdowns:s.top5, npt_categories:s.cats,
     spc:s.dailyGoodMainSeries.length>4?{mean:+(s.dailyGoodMainSeries.reduce((a,b)=>a+b,0)/s.dailyGoodMainSeries.length).toFixed(0),
       sigma:+(Math.sqrt(s.dailyGoodMainSeries.reduce((x,v)=>x+(v-s.dailyGoodMainSeries.reduce((a,b)=>a+b,0)/s.dailyGoodMainSeries.length)**2,0)/(s.dailyGoodMainSeries.length-1))).toFixed(0),
@@ -1107,7 +1084,6 @@ function buildReport(p){
   ${tr('Planning Achievement',k.planning_achievement_pct!=null?k.planning_achievement_pct+'%':'—','—',assess(k.planning_achievement_pct,95,85))}
   ${tr('MRO Downtime',f0(k.mro_downtime_hrs)+' h','—',k.mro_events+' events')}
   ${tr('Scheduled Maintenance',f0(k.scheduled_maintenance_hrs)+' h','—',k.scheduled_maintenance_events+' events')}
-  ${tr('Overtime',f0(k.overtime_hrs)+' h',arr(dl.overtime_hrs,' h'),f0(k.overtime_entries)+' entries')}
   ${tr('MOH Cost',k.moh_cost_bdt?'৳'+f0(k.moh_cost_bdt):'—','—',k.moh_cost_bdt?'booked':'no bookings')}
   </table>`;
   /* exec summary */
@@ -1128,7 +1104,6 @@ function buildReport(p){
   if(k.performance_pct!=null&&k.performance_pct<70) R.push(`Performance at ${k.performance_pct}%: verify packer/VRM set-points vs rated capacity, reduce micro-stops, and review numCapacityPerHr master data for packers (target P ≥ 85%).`);
   if(k.scheduled_maintenance_hrs!=null&&k.scheduled_maintenance_hrs===0&&k.mro_downtime_hrs>0) R.push(`Zero scheduled-maintenance hours logged against ${k.mro_downtime_hrs} h unplanned MRO — restore PM calendar compliance and log planned work in MES to shift the planned/unplanned ratio toward ≥70/30.`);
   if(k.planning_achievement_pct!=null&&k.planning_achievement_pct<95) R.push(`Close the ${f1(100-k.planning_achievement_pct)} pp plan gap: lock weekly production plan freeze, monitor daily plan adherence, and trigger RCA on >5% variance days.`);
-  if(k.overtime_hrs>0&&dl.output_main!=null&&dl.output_main<=0) R.push(`Overtime at ${f0(k.overtime_hrs)} h while output did not rise — audit OT justification vs production output to cut cost.`);
   if(k.capacity_utilization_pct!=null&&k.capacity_utilization_pct<40) R.push(`Capacity utilization only ${k.capacity_utilization_pct}% — evaluate order book, shift loading and demand smoothing; significant fixed-cost dilution opportunity.`);
   if(sp) R.push(`SPC: daily output σ=${f0(sp.sigma)} ${sp.uom||''} (±${((sp.sigma*3/(sp.mean||1))*100).toFixed(1)}% at ±3σ) — tighten shift handover, feed/material quality and changeover discipline to cut variation.`);
   if(!R.length) R.push('Sustain current performance; extend runtime-capture data quality and keep monthly RCA reviews.');
