@@ -1,17 +1,7 @@
-/* api/machine-oee.js — per-machine / shop-floor OEE from MES DWH */
-const sql = require('mssql');
+/* api/machine-oee.js — per-machine / shop-floor OEE from iBOSDD via MCP proxy */
+const { callMCP } = require('./_mcp.js');
 
-const mssqlConfig = () => ({
-  server: process.env.MSSQL_SERVER || '203.202.241.211',
-  port: parseInt(process.env.MSSQL_PORT || '1433'),
-  user: process.env.MSSQL_USER || 'mcp_user',
-  password: process.env.MSSQL_PASSWORD || 'iAOS@35o997',
-  database: process.env.MSSQL_DATABASE || 'DWH',
-  options: { encrypt: false, trustServerCertificate: true },
-  requestTimeout: 30000,
-});
-let pool = null;
-async function getPool(){ if (pool && pool.connected) return pool; pool = await new sql.ConnectionPool(mssqlConfig()).connect(); return pool; }
+const num = s => { const n = parseFloat(String(s||'').replace(/,/g,'')); return isNaN(n) ? 0 : n; };
 
 function agg(rows){
   let loading=0,runtime=0,actual=0,good=0,capRun=0,capShift=0,lRt=0,actRun=0;
@@ -28,21 +18,21 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');
   const bu = parseInt(req.query.bu || '4', 10);
-  const from = req.query.from || '2026-07-01';
+  const from = req.query.from || '2026-08-01';
   const to = req.query.to || '2026-08-31';
   let machineCond;
   if (req.query.machines) { const list = req.query.machines.split(',').map(x=>`'${x.trim().replace(/'/g,"''")}'`).join(','); machineCond = `strMachineName IN (${list})`; }
   else if (req.query.shopfloor) { machineCond = `strShopFloorName='${req.query.shopfloor.replace(/'/g,"''")}'`; }
   else { const pat = (req.query.pattern||'VRM%').replace(/'/g,"''"); machineCond = `strMachineName LIKE '${pat}'`; }
   try {
-    const db = await getPool();
-    const result = await db.request().query(`SELECT CONVERT(varchar(10), dteProductionDate,23) d, strMachineName m, strUOMName u,
+    const sql = `SELECT CONVERT(varchar(10), dteProductionDate,23) d, strMachineName m, strUOMName u,
       SUM(ISNULL(numLoadingMinute,0)) l, SUM(ISNULL(NumMachineRuntime,0)) run, SUM(ISNULL(numActualOutputQuantity,0)) a, SUM(ISNULL(numGoodOutputQuantity,0)) g,
       SUM(ISNULL(numCapacityPerHr,0)*ISNULL(NumMachineRuntime,0)/60.0) cr, SUM(ISNULL(numCapacityPerHr,0)*ISNULL(numShiftDurationMinute,0)/60.0) cs
-      FROM mes.tblOeeProdWasteHeaderArc
+      FROM mes.tblOeeProdWasteHeader
       WHERE intBusinessUnitId=${bu} AND ${machineCond} AND dteProductionDate >= '${from}' AND dteProductionDate <= '${to}'
-      GROUP BY CONVERT(varchar(10), dteProductionDate,23), strMachineName, strUOMName ORDER BY d`);
-    const r = result.recordset.map(x => ({ d:x.d, m:x.m, u:x.u, l:+x.l||0, run:+x.run||0, a:+x.a||0, g:+x.g||0, cr:+x.cr||0, cs:+x.cs||0 }));
+      GROUP BY CONVERT(varchar(10), dteProductionDate,23), strMachineName, strUOMName ORDER BY d`;
+    const rows = await callMCP('mes', 'ExecuteReadOnlyQueryAsync', { sqlQuery: sql });
+    const r = rows.map(x => ({ d:x.d, m:x.m, u:x.u, l:num(x.l), run:num(x.run), a:num(x.a), g:num(x.g), cr:num(x.cr), cs:num(x.cs) }));
     const machines=[...new Set(r.map(x=>x.m))];
     const mmap={}; r.forEach(x=>{ const k=x.d+'|'+x.m; mmap[k]=mmap[k]||[]; mmap[k].push(x); });
     const byMachineDaily=[];
