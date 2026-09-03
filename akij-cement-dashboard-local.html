@@ -163,6 +163,14 @@ tr:last-child td{border-bottom:none}
     <div class="ch"><canvas id="chSm"></canvas></div>
   </div>
 
+  <!-- Overtime -->
+  <div class="panel" id="otPanel">
+    <h3>Overtime</h3>
+    <div class="note">Daily OT actual vs per-day target (monthly target ÷ 30) · <span id="otNote">—</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:10px 0" id="otKpi"></div>
+    <div class="ch"><canvas id="chOt"></canvas></div>
+  </div>
+
   <!-- MOH -->
   <div class="panel">
     <h3>MOH — Manufacturing Overhead Cost</h3>
@@ -281,6 +289,13 @@ function oeeTgt(ym){
   return (v==null || v===0) ? null : v;
 }
 
+/* ---------- Overtime (daily actual + monthly target, per plant) ---------- */
+const OT_CFG = {
+  accl: { name:'ACCL', target: 1087700, daily:{'2026-08-01':12421.18,'2026-08-02':9784.42,'2026-08-03':13869.57,'2026-08-04':11985.86,'2026-08-05':0,'2026-08-06':9815.37,'2026-08-07':13839.45,'2026-08-08':13128.32,'2026-08-09':2034.17,'2026-08-10':7121.12,'2026-08-11':25636.57,'2026-08-12':25252.10,'2026-08-13':19423.71,'2026-08-14':15694.33,'2026-08-15':21603.35,'2026-08-16':26204.43,'2026-08-17':22334.16,'2026-08-18':19753.90,'2026-08-19':25171.69,'2026-08-20':16218.71,'2026-08-21':12414.93,'2026-08-22':15211.03,'2026-08-23':17877.37,'2026-08-24':34048.35,'2026-08-25':30010.30,'2026-08-26':175.00,'2026-08-27':27712.02,'2026-08-28':15161.16,'2026-08-29':37562.01,'2026-08-30':39053.00,'2026-08-31':0} },
+  ail:  { name:'AIL', target: null, daily:{'2026-08-01':44374.37,'2026-08-02':31588.94,'2026-08-03':41569.91,'2026-08-04':44791.67,'2026-08-05':8066.13,'2026-08-06':34513.97,'2026-08-07':31846.72,'2026-08-08':36989.82,'2026-08-09':18001.00,'2026-08-10':15991.07,'2026-08-11':14132.20,'2026-08-12':15922.37,'2026-08-13':23069.01,'2026-08-14':18965.81,'2026-08-15':5025.78,'2026-08-16':8603.62,'2026-08-17':17308.95,'2026-08-18':16890.72,'2026-08-19':14009.46,'2026-08-20':15532.06,'2026-08-21':11886.92,'2026-08-22':41246.50,'2026-08-23':10605.48,'2026-08-24':11369.84,'2026-08-25':9593.40,'2026-08-26':3927.03,'2026-08-27':9740.48,'2026-08-28':14965.17,'2026-08-29':10099.08,'2026-08-30':15956.83,'2026-08-31':9339.80} },
+  apfil:{ name:'APFIL', target: 521500, daily:{'2026-08-01':18899.12,'2026-08-02':18014.84,'2026-08-03':2789.28,'2026-08-04':14506.60,'2026-08-05':0,'2026-08-06':7945.56,'2026-08-07':10205.29,'2026-08-08':13237.12,'2026-08-09':17314.76,'2026-08-10':10161.76,'2026-08-11':19615.68,'2026-08-12':9769.84,'2026-08-13':22348.79,'2026-08-14':15340.03,'2026-08-15':14584.16,'2026-08-16':15451.34,'2026-08-17':24762.20,'2026-08-18':27824.54,'2026-08-19':21555.78,'2026-08-20':30004.25,'2026-08-21':15860.44,'2026-08-22':17258.12,'2026-08-23':25845.04,'2026-08-24':18724.53,'2026-08-25':17525.44,'2026-08-26':0,'2026-08-27':22116.96,'2026-08-28':8540.00,'2026-08-29':12607.81,'2026-08-30':14015.66,'2026-08-31':0} },
+};
+
 /* ---------- KPI helpers (data from iBOSDD) ---------- */
 async function fetchLiveData(){
   const liveEl=document.querySelector('.live');
@@ -389,8 +404,38 @@ function setPlant(key){
   const rn=$('rcaPlantNote'); if(rn) rn.textContent=P.meta.name;
   render();
   loadMachineOee();
+  renderOvertime();
 }
-/* ---- Machine OEE detail (VRM for ACCL, Rolling for Ispat, Loom for Poly Fibre) ---- */
+/* ---- Overtime (daily actual vs per-day target) ---- */
+function renderOvertime(){
+  const panel=$('otPanel'); if(!panel) return;
+  const cfg=OT_CFG[PLANT];
+  if(!cfg){ panel.style.display='none'; return; }
+  panel.style.display='';
+  const note=$('otNote');
+  const days=Object.keys(cfg.daily).sort();
+  const perDayTgt = cfg.target!=null ? cfg.target/30 : null;
+  const today=(TO||P.meta.maxDate).slice(0,10);
+  const todayActual = cfg.daily[days.find(d=>d<=today)||days[days.length-1]]||0;
+  const monthTotal = days.reduce((s,d)=>s+(cfg.daily[d]||0),0);
+  if(note) note.textContent=`${cfg.name} · Aug-26 · target/day ${perDayTgt!=null?fmt(perDayTgt,0):'no target'} · monthly actual ${fmt(monthTotal,0)}`;
+  const kpi=$('otKpi');
+  kpi.innerHTML=[
+    {l:'OT Actual (today)', v:fmt(todayActual,0), ac:'var(--amber)'},
+    {l:'OT Target / day', v:perDayTgt!=null?fmt(perDayTgt,0):'—', ac:'var(--blue)'},
+    {l:'OT Month Total', v:fmt(monthTotal,0), ac:'var(--green)'},
+  ].map(k=>`<div class="kpi" style="--ac:${k.ac};padding:10px 12px"><div class="lbl">${k.l}</div><div class="val" style="font-size:20px">${k.v}</div></div>`).join('');
+  // chart: daily actual bar + target line
+  if(charts.ot) charts.ot.destroy();
+  const labels=days.map(d=>d.slice(8));
+  const vals=days.map(d=>cfg.daily[d]||0);
+  charts.ot=new Chart($('chOt'),{data:{labels,datasets:[
+    {type:'bar',label:'OT Actual (৳)',data:vals,backgroundColor:'rgba(251,191,36,.7)',borderRadius:4},
+    ...(perDayTgt!=null?[{type:'line',label:'OT Target/day',data:labels.map(()=>perDayTgt),borderColor:'#f472b6',borderDash:[6,4],borderWidth:2,pointRadius:0}]:[]),
+  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+    plugins:{legend:{position:'top'},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y,0)}`}}},
+    scales:{y:{beginAtZero:true,ticks:{callback:v=>fmt(v/1000,0)+'k'}},x:{ticks:{maxTicksLimit:15}}}}});
+}
 const MACHINE_OEE_TITLES = {
   accl:  { query:'machines=VRM-1,VRM-2',            label:'VRM-1 + VRM-2 (Vertical Roller Mill) — combined', empty:'No VRM data' },
   ail:   { query:'shopfloor=Re-Rolling Shop Floor', label:'Rolling (Re-Rolling Shop Floor) — combined', empty:'No Rolling data' },
