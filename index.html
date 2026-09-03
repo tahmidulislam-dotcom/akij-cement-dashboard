@@ -86,7 +86,6 @@ tr:last-child td{border-bottom:none}
   </div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
     <span class="live">● LIVE DWH DATA</span>
-    <button class="btn ghost" onclick="openOpex()" style="padding:6px 12px;font-size:11.5px" title="Open the OPEX Dashboard">📊 Opex</button>
     <button class="btn ghost" id="btnLiveRefresh" onclick="refreshLive()" style="padding:6px 12px;font-size:11.5px">↻ Refresh Live</button>
     <span style="font-size:11px;color:var(--mut)" id="liveStatus"></span>
   </div>
@@ -227,7 +226,7 @@ tr:last-child td{border-bottom:none}
       <span class="ai-status" id="alertStatus"></span>
     </div>
     <div style="margin-top:12px;font-size:12px;color:var(--mut)">
-      <b>Conditions checked:</b> OEE &lt; target · Yield &lt; 97% · Capacity Util &lt; 80% · Planning &lt; 80% · Good Output (capacity) · Waste &gt; target · MOH &gt; target · Scheduled maintenance vs plan.
+      <b>Conditions checked:</b> OEE &lt; target · Yield &lt; 97% · Capacity Util &lt; 80% · Planning &lt; 80% · Actual Output (capacity) · Waste &gt; target · MOH &gt; target · Scheduled maintenance vs plan.
     </div>
 
     <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
@@ -302,9 +301,6 @@ async function fetchLiveData(){
   }
   return false;
 }
-// Open the OPEX dashboard in a new tab
-const OPEX_URL = 'https://vercel-liard-eight-31.vercel.app/';
-function openOpex(){ window.open(OPEX_URL, '_blank'); }
 async function refreshLive(){
   const btn=$('btnLiveRefresh'); const st=$('liveStatus');
   if(btn) btn.textContent='↻ Refreshing…';
@@ -438,7 +434,7 @@ async function loadMachineOee(){
       {l:'Performance', v:pct(c.P), s:'Actual ÷ (Rated×Runtime)', ac:'var(--amber)'},
       {l:'Quality / Yield', v:pct(c.Q), s:'Good ÷ Actual', ac:'var(--green)'},
       {l:'Capacity Utilization', v:pct(c.CU), s:'Actual ÷ (Rated×Shift)'+((!['armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','absl'].includes(PLANT))?' · Target 80%':''), ac:'var(--purple)'},
-      {l:'Good Output', v:fmt(c.good,0)+' '+unit, s:'Actual '+fmt(c.actual,0)+' '+unit+(mTgt?' · '+mTgt:''), ac:'var(--pink)'},
+      {l:'Actual Output', v:fmt(c.actual,0)+' '+unit, s:(mTgt?mTgt:''), ac:'var(--pink)'},
     ].map(k=>`<div class="kpi" style="--ac:${k.ac};padding:11px 13px"><div class="lbl">${k.l}</div><div class="val" style="${k.big?'font-size:24px':'font-size:20px'}">${k.v}</div><div class="sub">${k.s||''}</div></div>`).join('');
     $('vrmKpi').innerHTML=kpi;
     // Calculation / breakdown table
@@ -578,10 +574,10 @@ function render(){
   // Production target from iBOSDD bgt.tblBudgetProduction (per month, per UoM). Per-day = /30. Weight UoMs only.
   const curM = (TO||P.meta.maxDate).slice(0,7);
   const isWeight = u => /ton|kg|kilogram|mt/.test(String(u||'').toLowerCase());
-  // Good Output in weight UoMs only (MT/Kg)
+  // Actual Output in weight UoMs only (MT/Kg)
   const wRows = D.filter(r=>isWeight(r.u));
   const wStats = uomStats(wRows);
-  const goodVal = wStats.length ? wStats.map(x=>`${fmt(x.q/1000,1)} ${x.u==='Ton'||/ton|mt/.test(x.u)?'MT':'Kg'}`).join(' · ') : '—';
+  const goodVal = wStats.length ? wStats.map(x=>`${fmt(x.a/1000,1)} ${x.u==='Ton'||/ton|mt/.test(x.u)?'MT':'Kg'}`).join(' · ') : '—';
   const tgtLine = (v,suffix)=> (v==null?'':`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${v}${suffix||''}</div>`);
   // Per-day capacity targets (iBOSDD: Σ(Cap/hr × AvailMin/60)) — sum over the selected [FROM,TO] range
   const capTgtRows = (P.capTarget||[]).filter(x=>inRange(x.d));
@@ -620,7 +616,7 @@ function render(){
     {l:'Planning Achievement', v:pct(planAch), s:`${fmt(actTot,0)} vs ${fmt(planTot,0)} ${domUom||''} planned${pvCard.coverage<0.95?` · ${(pvCard.coverage*100).toFixed(0)}% UoM-matched`:''}`+tgtLine(PLAN_TGT!=null?PLAN_TGT+'%':null), ac:'var(--amber)'},
     {l:'Scheduled Maintenance', v:fmt(smMin/60,0)+' h', s:`${smEvt} planned events`, ac:'var(--blue)'},
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},
-    {l:'Good Output', v:goodVal, s:prodLine(), ac:'var(--teal)'},
+    {l:'Actual Output', v:goodVal, s:prodLine(), ac:'var(--teal)'},
     {l:'Waste', v:(wasteVal.v||'—'), s:(wasteVal.s||''), ac:'var(--red)'},
   ];
   $('kpiGrid').innerHTML = kpis.map(k=>`<div class="kpi" style="--ac:${k.ac}"><div class="lbl">${k.l}</div><div class="val">${k.v}</div><div class="sub">${k.s||''}</div></div>`).join('');
