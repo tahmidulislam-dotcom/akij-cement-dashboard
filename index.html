@@ -415,11 +415,12 @@ async function loadMachineOee(){
     // KPI cards: OEE + factors
     const unit = (c && c.u) || (j.perMachine[0] && j.perMachine[0].u) || 't';
     const shortName = cfg.label.split(' — ')[0];
-    // Target Output from productionEntryOee (numShiftTargetQuantity) — machine category (capTarget) fallback
+    // Target Output from productionEntryOee (numShiftTargetQuantity) — machine-filtered (machDaily) when available
     let mTgt='';
     try{
-      const dRows = D.filter(x=>inRange(x.d));
-      const byU0={}; dRows.forEach(x=>{byU0[x.u]=(byU0[x.u]||0)+(x.t||0);});   // raw target from db
+      const md = (P.machDaily||[]).filter(x=>inRange(x.d));
+      const dRows = md.length ? md : D.filter(x=>inRange(x.d));
+      const byU0={}; dRows.forEach(x=>{byU0[x.u]=(byU0[x.u]||0)+((x.target!=null?x.target:x.t)||0);});   // raw target from db
       const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
       const parts=Object.entries(byU0).map(([u,q])=>`${fmt(q,0)} ${u}`);
       if(parts.length) mTgt=`Target Output ${parts.join(' · ')} / ${days} day${days>1?'s':''}`;
@@ -504,7 +505,7 @@ function oeeAgg(rows){
 function uomStats(rows){
   const by={};
   rows.forEach(r=>{ by[r.u]=by[r.u]||{g:0,a:0,cs:0}; by[r.u].g+=r.g; by[r.u].a+=r.a; by[r.u].cs+=r.cs; });
-  return Object.entries(by).map(([u,v])=>({u,q:v.g,y:v.a>0?v.g/v.a:null,cu:v.cs>0?v.a/v.cs:null}))
+  return Object.entries(by).map(([u,v])=>({u,q:v.g,a:v.a,y:v.a>0?v.g/v.a:null,cu:v.cs>0?v.a/v.cs:null}))
     .sort((x,y)=>y.q-x.q);
 }
 function plantOEE(dailyRows){ return oeeAgg(dailyRows); }
@@ -568,26 +569,27 @@ function render(){
   const hasTarget = !NO_TARGET_PLANTS.includes(PLANT);
   const YIELD_TGT = hasTarget ? 97 : null;
   const PLAN_TGT  = hasTarget ? 80 : null;
-  // Production target from iBOSDD bgt.tblBudgetProduction (per month, per UoM). Per-day = /30. Weight UoMs only.
-  const curM = (TO||P.meta.maxDate).slice(0,7);
-  const isWeight = u => /ton|kg|kilogram|mt/.test(String(u||'').toLowerCase());
-  // Actual Output from database — raw value + raw UoM, no conversion
-  const aStats = uomStats(D);
+  // Actual Output from database — raw value + raw UoM, no conversion.
+  // Use machine-filtered rows (machDaily: ACCL VRM / APFIL Loom / AIL Rolling) when available, else daily.
+  const srcRows = (P.machDaily||[]).filter(x=>inRange(x.d));
+  const aSrc = srcRows.length ? srcRows : D;
+  const aStats = uomStats(aSrc.map(x=>({d:x.d,u:x.u,a:x.actual!=null?x.actual:x.a,g:x.a!=null?x.a:(x.g||0),cs:(x.cs||0)})));
   const goodVal = aStats.length ? aStats.map(x=>`${fmt(x.a,0)} ${x.u}`).join(' · ') : '—';
   const tgtLine = (v,suffix)=> (v==null?'':`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${v}${suffix||''}</div>`);
   // Target Output from productionEntryOee (numShiftTargetQuantity) — sum over selected range, raw from db
-  const tgtOutRows = D;
+  const tgtOutRows = srcRows.length ? srcRows : D.filter(x=>x.t!=null);
   const prodLine = ()=> {
     if(!tgtOutRows.length) return '';
     const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
     const byU = {};
-    tgtOutRows.forEach(x=>{ byU[x.u]=(byU[x.u]||0)+(x.t||0); });   // raw target from DB, no conversion
+    tgtOutRows.forEach(x=>{ byU[x.u]=(byU[x.u]||0)+((x.target!=null?x.target:x.t)||0); });   // raw target from DB, no conversion
     const parts = Object.entries(byU).map(([u,q])=>`${fmt(q,0)} ${u}`);
     const total = parts.length?parts.join(' · '):'—';
     let perDay = 0; Object.entries(byU).forEach(([u,q])=>perDay+=q);
     return `<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target Output ${total} · ${fmt(perDay/days,0)}/day</div>`;
   };
   // Waste actual + target (iBOSDD) — today's value in a separate card
+  const isWeight = u => /ton|kg|kilogram|mt/.test(String(u||'').toLowerCase());
   const wasteVal = (()=> {
     const wr = (P.waste||[]).filter(x=>isWeight(x.u));
     if(!wr.length) return {v:null, s:'No waste data'};

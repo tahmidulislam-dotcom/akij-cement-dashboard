@@ -83,28 +83,21 @@ async function injectMOH(live) {
   return live;
 }
 
-// Production targets from bgt.tblBudgetProduction (per BU per month).
-// Capture the budget quantity in the UoMs that match the plant's dominant output UoM(s)
-// (Bag, Ton, Pecs/Pieces, Meter/Metre, MetricTons, CubicFoot, ...), so the target shows in the plant's own unit.
-// Good-Output per-day target = Σ(Cap/hr × AvailMin/60), weight UoMs only (from mes.tblOeeProdWasteHeader).
-// Stored per date + UoM, so the dashboard can sum over any selected range.
+// Machine-filtered Actual + Target output (per date + UoM) from mes.tblOeeProdWasteHeader.
+// ACCL -> VRM1+2, APFIL -> Loom, AIL -> Rolling; others -> all machines. Stored per date for range summing.
 async function injectProductTargets(live) {
   try {
     const normU = n => String(n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
     for (const P of PLANTS) {
       const t = live.plants?.[P.key]; if (!t) continue;
-      const uCount = {};
-      (t.daily||[]).forEach(d=>{ const k=normU(d.u); uCount[k]=(uCount[k]||0)+d.g; });
-      const dom = Object.entries(uCount).sort((a,b)=>b[1]-a[1]).slice(0,3).map(x=>x[0]);
-      if(!dom.length) continue;
-      if(!dom.some(d=>/ton|kg|kilogram|mt/.test(d))) continue;   // no weight output
+      const mf = MACHINE_FILTER[P.key] ? ` AND ${MACHINE_FILTER[P.key]}` : '';
       const rows = await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
-        `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numCapacityPerHr,0)*ISNULL(numAvailableMinute,0)/60.0) tgt FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} ${MACHINE_FILTER[P.key]?` AND ${MACHINE_FILTER[P.key]}`:''} GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000});
+        `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numActualOutputQuantity,0)) actual, SUM(ISNULL(numShiftTargetQuantity,0)) target FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} ${mf} GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000});
       if(!rows.length) continue;
-      t.capTarget = t.capTarget || [];
-      const ck = new Map(t.capTarget.map(x=>[x.d+'|'+x.u, x]));
-      rows.forEach(r=>{ ck.set(r.d+'|'+normU(r.u), {d:r.d, u:normU(r.u), target:num(r.tgt)}); });
-      t.capTarget = [...ck.values()].sort((a,b)=>a.d<b.d?-1:1);
+      t.machDaily = t.machDaily || [];
+      const mk = new Map(t.machDaily.map(x=>[x.d+'|'+x.u, x]));
+      rows.forEach(r=>{ mk.set(r.d+'|'+normU(r.u), {d:r.d, u:normU(r.u), actual:num(r.actual), target:num(r.target)}); });
+      t.machDaily = [...mk.values()].sort((a,b)=>a.d<b.d?-1:1);
     }
   } catch(e) { /* skip */ }
   return live;
