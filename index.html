@@ -415,17 +415,15 @@ async function loadMachineOee(){
     // KPI cards: OEE + factors
     const unit = (c && c.u) || (j.perMachine[0] && j.perMachine[0].u) || 't';
     const shortName = cfg.label.split(' — ')[0];
-    // Good-Output capacity target (Σ Cap/hr × AvailMin/60) for the selected range, from machine-filtered capTarget
+    // Target Output from productionEntryOee (numShiftTargetQuantity) — machine category (capTarget) fallback
     let mTgt='';
     try{
-      const rows=(P.capTarget||[]).filter(x=>inRange(x.d));
-      if(rows.length){
-        const uLabel = x=>({ton:'MT',metrictons:'MT',metricton:'MT',mt:'MT',kilogram:'Kg',kg:'Kg',bag:'Bag',pices:'Pcs',pecs:'Pcs',cubicfoot:'CubicFt',meter:'Meter',metre:'Meter'}[x]||x);
-        const byU0={}; rows.forEach(x=>{byU0[x.u]=byU0[x.u]||0;byU0[x.u]+=x.target;});
-        const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
-        const parts=Object.entries(byU0).map(([u,q])=>{const isMT=/ton|mt/.test(u);return `${fmt(isMT?q:q/1000,0)} ${isMT?'MT':uLabel(u)}`;});
-        mTgt=`Target ${parts.join(' · ')} / ${days} day${days>1?'s':''}`;
-      }
+      const dRows = D.filter(x=>inRange(x.d) && /ton|kg|kilogram|mt/.test(String(x.u||'').toLowerCase()));
+      const uLabel = x=>({ton:'MT',metrictons:'MT',metricton:'MT',mt:'MT',kilogram:'Kg',kg:'Kg',bag:'Bag',pices:'Pcs',pecs:'Pcs',cubicfoot:'CubicFt',meter:'Meter',metre:'Meter'}[x]||x);
+      const byU0={}; dRows.forEach(x=>{byU0[x.u]=(byU0[x.u]||0)+(x.t||0);});
+      const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
+      const parts=Object.entries(byU0).map(([u,q])=>{const isMT=/ton|mt/.test(u);return `${fmt(isMT?q:q/1000,0)} ${isMT?'MT':uLabel(u)}`;});
+      if(parts.length) mTgt=`Target Output ${parts.join(' · ')} / ${days} day${days>1?'s':''}`;
     }catch(e){}
     const kpi=[
       {l:shortName+' — Combined OEE', v:pct(c.OEE), ac:'var(--teal)', big:true},
@@ -579,18 +577,18 @@ function render(){
   const wStats = uomStats(wRows);
   const goodVal = wStats.length ? wStats.map(x=>`${fmt(x.a/1000,1)} ${x.u==='Ton'||/ton|mt/.test(x.u)?'MT':'Kg'}`).join(' · ') : '—';
   const tgtLine = (v,suffix)=> (v==null?'':`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${v}${suffix||''}</div>`);
-  // Per-day capacity targets (iBOSDD: Σ(Cap/hr × AvailMin/60)) — sum over the selected [FROM,TO] range
-  const capTgtRows = (P.capTarget||[]).filter(x=>inRange(x.d));
+  // Target Output from productionEntryOee (numShiftTargetQuantity, weight UoMs only) — sum over selected range
+  const tgtOutRows = D.filter(x=>isWeight(x.u));
   const uLabel = u => ({ton:'MT',metrictons:'MT',metricton:'MT',mt:'MT',kilogram:'Kg',kg:'Kg',bag:'Bag',pices:'Pcs',pecs:'Pcs',cubicfoot:'CubicFt',meter:'Meter',metre:'Meter'}[u] || (u.charAt(0).toUpperCase()+u.slice(1)));
   const prodLine = ()=> {
-    if(!capTgtRows.length) return '';
+    if(!tgtOutRows.length) return '';
     const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
     const byU = {};
-    capTgtRows.forEach(x=>{ const isMT=/ton|mt/.test(x.u); byU[x.u]=(byU[x.u]||0)+(isMT?x.target:(x.target||0)/1000); });
+    tgtOutRows.forEach(x=>{ const isMT=/ton|mt/.test(x.u); byU[x.u]=(byU[x.u]||0)+(isMT?(x.t||0):(x.t||0)/1000); });
     const parts = Object.entries(byU).map(([u,q])=>`${fmt(q,0)} ${uLabel(u)}`);
     const total = parts.length?parts.join(' · '):'—';
     let perDay = 0; Object.entries(byU).forEach(([u,q])=>perDay+=q);
-    return `<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${total} · ${fmt(perDay/days,0)}/day</div>`;
+    return `<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target Output ${total} · ${fmt(perDay/days,0)}/day</div>`;
   };
   // Waste actual + target (iBOSDD) — today's value in a separate card
   const wasteVal = (()=> {

@@ -122,13 +122,13 @@ async function mergeLive(live) {
     let rows = [];
     try {
       rows = await callMCP('mes', 'ExecuteReadOnlyQueryAsync', { sqlQuery:
-        `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numLoadingMinute,0)) l, SUM(ISNULL(NumMachineRuntime,0)) r, SUM(ISNULL(numActualOutputQuantity,0)) a, SUM(ISNULL(numGoodOutputQuantity,0)) g, SUM(ISNULL(numCapacityPerHr,0) * ISNULL(NumMachineRuntime,0) / 60.0) cr, SUM(ISNULL(numCapacityPerHr,0) * ISNULL(numShiftDurationMinute,0) / 60.0) cs FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ${pin} AND dteProductionDate > '${snapMax}' AND dteProductionDate <= '${today}' GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName))`, limit: 2000 });
+        `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numLoadingMinute,0)) l, SUM(ISNULL(NumMachineRuntime,0)) r, SUM(ISNULL(numActualOutputQuantity,0)) a, SUM(ISNULL(numGoodOutputQuantity,0)) g, SUM(ISNULL(numShiftTargetQuantity,0)) t, SUM(ISNULL(numCapacityPerHr,0) * ISNULL(NumMachineRuntime,0) / 60.0) cr, SUM(ISNULL(numCapacityPerHr,0) * ISNULL(numShiftDurationMinute,0) / 60.0) cs FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ${pin} AND dteProductionDate > '${snapMax}' AND dteProductionDate <= '${today}' GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName))`, limit: 2000 });
     } catch {}
     if (rows.length) {
       t.daily = t.daily || [];
       const existing = new Map(t.daily.map(x => [x.d + '|' + x.u, x]));
       rows.forEach(r => {
-        const row = { d:r.d, u:(r.u||'Unit').replace(/\s+/g,''), l:Math.round(num(r.l)), r:Math.round(num(r.r)), a:Math.round(num(r.a)*100)/100, g:Math.round(num(r.g)*100)/100, cr:Math.round(num(r.cr)*100)/100, cs:Math.round(num(r.cs)*100)/100 };
+        const row = { d:r.d, u:(r.u||'Unit').replace(/\s+/g,''), l:Math.round(num(r.l)), r:Math.round(num(r.r)), a:Math.round(num(r.a)*100)/100, g:Math.round(num(r.g)*100)/100, t:Math.round(num(r.t)*100)/100, cr:Math.round(num(r.cr)*100)/100, cs:Math.round(num(r.cs)*100)/100 };
         existing.set(row.d + '|' + row.u, row);
       });
       t.daily = [...existing.values()].sort((a,b)=>a.d<b.d?-1:1);
