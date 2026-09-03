@@ -1,13 +1,19 @@
 {
-  "name": "akij-resource-opex-dashboard",
-  "version": "2.0.0",
-  "description": "Shareable MCP endpoint for Akij Resource OPEX dashboard data",
+  "name": "akij-cement-dashboard",
+  "version": "1.0.0",
+  "description": "Shareable MCP endpoint for Akij Cement Dashboard data (all plants, OEE, capacity, MOH, waste, actual & target output)",
   "transport": "streamable-http",
-  "url": "https://akij-dashboard-deploy.vercel.app/api/mcp",
+  "url": "https://akij-cement-dashboard.vercel.app/api/mcp",
   "public": true,
-  "resources": ["dashboard://summary", "dashboard://reliability"],
+  "resources": [
+    "dashboard://summary",
+    "dashboard://live",
+    "dashboard://plant",
+    "dashboard://machine-oee",
+    "dashboard://moh"
+  ],
   "share_config": {
     "type": "remote",
-    "url": "https://akij-dashboard-deploy.vercel.app/api/mcp"
+    "url": "https://akij-cement-dashboard.vercel.app/api/mcp"
   }
 }
