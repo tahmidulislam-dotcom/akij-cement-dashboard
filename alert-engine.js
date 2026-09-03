@@ -79,7 +79,7 @@ function evaluateSbu(key, plant) {
 async function evaluateAll(live, emailConfig, state, sendFn) {
   const today = new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
   if (state.date !== today) { state.date = today; state.counts = {}; }
-  const sent = [], seen = [];
+  const sent = [], seen = [], deputyItems = [];
   for (const key of Object.keys(live.plants||{})) {
     const plant = live.plants[key];
     const alerts = evaluateSbu(key, plant);
@@ -88,20 +88,29 @@ async function evaluateAll(live, emailConfig, state, sendFn) {
     const st = state.counts[key] = state.counts[key] || { c: 0, kinds: {} };
     st.c += 1;
     const tier = st.c <= 1 ? 'plant_head' : (st.c === 2 ? 'hob_ceo' : 'deputy');
-    let to = [];
-    if (tier === 'plant_head') to = cfg.plant_head || [];
-    else if (tier === 'hob_ceo') to = cfg.hob_ceo || [];
-    else to = [emailConfig._deputy || 'deputy.coo@akijresource.com'];
-    if (!to.length) continue;
-    // don't re-send the same SBU+kinds twice the same run
     const sig = key+'|'+alerts.map(a=>a.type).join(',');
     if (seen.includes(sig)) continue; seen.push(sig);
     const rows = alerts.map(a=>`<li><b>${a.type}</b>: ${a.msg}</li>`).join('');
     const html = `<div style="font-family:Arial,sans-serif"><h3>${cfg.name||key} — Performance Alert (${tier})</h3>
       <p>Escalation ${st.c} — triggered condition(s):</p><ul>${rows}</ul>
       <p>Date: ${today}</p></div>`;
+    if (tier === 'deputy') {
+      // collect for one combined Deputy COO mail (all SBUs)
+      deputyItems.push({ key, name: cfg.name||key, types: alerts.map(a=>a.type), html });
+      continue;
+    }
+    let to = (tier === 'plant_head') ? (cfg.plant_head||[]) : (cfg.hob_ceo||[]);
+    if (!to.length) continue;
     try { await sendFn(to, `ALERT ${cfg.name||key} — ${alerts.map(a=>a.type).join(', ')}`, html); sent.push({ key, tier, to, types: alerts.map(a=>a.type) }); }
     catch(e){ sent.push({ key, tier, to, error: e.message }); }
+  }
+  // Combined Deputy COO mail — one mail for ALL SBUs
+  if (deputyItems.length) {
+    const depTo = [emailConfig._deputy || 'deputy.coo@akijresource.com'];
+    const body = deputyItems.map(i=>`<div style="border-top:1px solid #ddd;margin-top:10px;padding-top:8px"><h3 style="margin:2px 0">${i.name} (${i.key})</h3><ul>${i.html.match(/<ul>[\s\S]*?<\/ul>/)?i.html.match(/<ul>[\s\S]*?<\/ul>/)[0]:''}</ul></div>`).join('');
+    const combinedHtml = `<div style="font-family:Arial,sans-serif"><h2>⚡ Escalation Alert — Deputy COO (all SBUs)</h2><p>Date: ${today}</p><p>Following SBUs triggered performance alerts (3rd escalation):</p>${body}</div>`;
+    try { await sendFn(depTo, `⚡ DEPUTY COO ALERT — ${deputyItems.length} SBU(s)`, combinedHtml); sent.push({ key:'ALL', tier:'deputy', to:depTo, types: deputyItems.flatMap(i=>i.types) }); }
+    catch(e){ sent.push({ key:'ALL', tier:'deputy', to:depTo, error:e.message }); }
   }
   return { sent, state };
 }
