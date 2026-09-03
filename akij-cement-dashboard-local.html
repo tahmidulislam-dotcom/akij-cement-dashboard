@@ -418,11 +418,10 @@ async function loadMachineOee(){
     // Target Output from productionEntryOee (numShiftTargetQuantity) — machine category (capTarget) fallback
     let mTgt='';
     try{
-      const dRows = D.filter(x=>inRange(x.d) && /ton|kg|kilogram|mt/.test(String(x.u||'').toLowerCase()));
-      const uLabel = x=>({ton:'MT',metrictons:'MT',metricton:'MT',mt:'MT',kilogram:'Kg',kg:'Kg',bag:'Bag',pices:'Pcs',pecs:'Pcs',cubicfoot:'CubicFt',meter:'Meter',metre:'Meter'}[x]||x);
-      const byU0={}; dRows.forEach(x=>{byU0[x.u]=(byU0[x.u]||0)+(x.t||0);});
+      const dRows = D.filter(x=>inRange(x.d));
+      const byU0={}; dRows.forEach(x=>{byU0[x.u]=(byU0[x.u]||0)+(x.t||0);});   // raw target from db
       const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
-      const parts=Object.entries(byU0).map(([u,q])=>{const isMT=/ton|mt/.test(u);return `${fmt(isMT?q:q/1000,0)} ${isMT?'MT':uLabel(u)}`;});
+      const parts=Object.entries(byU0).map(([u,q])=>`${fmt(q,0)} ${u}`);
       if(parts.length) mTgt=`Target Output ${parts.join(' · ')} / ${days} day${days>1?'s':''}`;
     }catch(e){}
     const kpi=[
@@ -572,20 +571,18 @@ function render(){
   // Production target from iBOSDD bgt.tblBudgetProduction (per month, per UoM). Per-day = /30. Weight UoMs only.
   const curM = (TO||P.meta.maxDate).slice(0,7);
   const isWeight = u => /ton|kg|kilogram|mt/.test(String(u||'').toLowerCase());
-  // Actual Output in weight UoMs only (MT/Kg)
-  const wRows = D.filter(r=>isWeight(r.u));
-  const wStats = uomStats(wRows);
-  const goodVal = wStats.length ? wStats.map(x=>`${fmt(x.a/1000,1)} ${x.u==='Ton'||/ton|mt/.test(x.u)?'MT':'Kg'}`).join(' · ') : '—';
+  // Actual Output from database — raw value + raw UoM, no conversion
+  const aStats = uomStats(D);
+  const goodVal = aStats.length ? aStats.map(x=>`${fmt(x.a,0)} ${x.u}`).join(' · ') : '—';
   const tgtLine = (v,suffix)=> (v==null?'':`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${v}${suffix||''}</div>`);
-  // Target Output from productionEntryOee (numShiftTargetQuantity, weight UoMs only) — sum over selected range
-  const tgtOutRows = D.filter(x=>isWeight(x.u));
-  const uLabel = u => ({ton:'MT',metrictons:'MT',metricton:'MT',mt:'MT',kilogram:'Kg',kg:'Kg',bag:'Bag',pices:'Pcs',pecs:'Pcs',cubicfoot:'CubicFt',meter:'Meter',metre:'Meter'}[u] || (u.charAt(0).toUpperCase()+u.slice(1)));
+  // Target Output from productionEntryOee (numShiftTargetQuantity) — sum over selected range, raw from db
+  const tgtOutRows = D;
   const prodLine = ()=> {
     if(!tgtOutRows.length) return '';
     const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
     const byU = {};
-    tgtOutRows.forEach(x=>{ const isMT=/ton|mt/.test(x.u); byU[x.u]=(byU[x.u]||0)+(isMT?(x.t||0):(x.t||0)/1000); });
-    const parts = Object.entries(byU).map(([u,q])=>`${fmt(q,0)} ${uLabel(u)}`);
+    tgtOutRows.forEach(x=>{ byU[x.u]=(byU[x.u]||0)+(x.t||0); });   // raw target from DB, no conversion
+    const parts = Object.entries(byU).map(([u,q])=>`${fmt(q,0)} ${u}`);
     const total = parts.length?parts.join(' · '):'—';
     let perDay = 0; Object.entries(byU).forEach(([u,q])=>perDay+=q);
     return `<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target Output ${total} · ${fmt(perDay/days,0)}/day</div>`;
