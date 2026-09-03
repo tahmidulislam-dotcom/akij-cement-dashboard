@@ -231,6 +231,7 @@ tr:last-child td{border-bottom:none}
       <button class="btn ghost" onclick="toggleAlertEdit()">✏️ Edit Alert Recipients</button>
       <button class="btn" onclick="saveAlertEmails()">💾 Save Alert Recipients</button>
       <button class="btn ghost" onclick="runAlertCheck()">▶ Run Alert Check (test)</button>
+      <button class="btn ghost" onclick="sendTestMail()">📬 Send Test Mail (all SBUs)</button>
       <span class="ai-status" id="alertStatus"></span>
     </div>
     <div style="margin-top:12px;font-size:12px;color:var(--mut)">
@@ -917,6 +918,13 @@ function runAlertCheck(){
     const s=(d.sent||[]);
     alertStatus(`Checked · ${s.length} alert(s) escalated: ${s.map(x=>x.key+'→'+x.tier).join(', ')||'none'}`,'ok');
   }).catch(e=>alertStatus('Failed: '+e.message,'err'));
+}
+function sendTestMail(){
+  alertStatus('Sending test mail to watidmahiya@gmail.com…','wait');
+  fetch(`${API}/api/alert-test`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:'watidmahiya@gmail.com'})}).then(r=>r.json()).then(d=>{
+    if(d.error) return alertStatus('Test mail error: '+d.error,'err');
+    alertStatus(`Test mail sent to ${d.to} — all SBUs · ${d.date} ✔`,'ok');
+  }).catch(e=>alertStatus('Test mail failed: '+e.message,'err'));
 }
 
 function aiInit(){

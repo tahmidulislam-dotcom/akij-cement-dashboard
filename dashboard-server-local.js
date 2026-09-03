@@ -188,6 +188,17 @@ const server = http.createServer(async (req, res) => {
       saveAlertCfg(cfg);
       return json(res, 200, { ok: true, alertsEnabled: cfg.alertsEnabled });
     }
+    if (url.pathname === '/api/alert-test' && req.method === 'POST') {
+      try {
+        const b = await readBody(req);
+        const to = (b && b.to) || 'watidmahiya@gmail.com';
+        const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
+        const live = r.ok ? (await r.json()) : { plants:{} };
+        const cfg = loadAlertCfg();
+        const out = await alertEngine.sendTestMail(live, cfg, to, async (t, subject, htmlBody) => { return await gmailSend(t, subject, htmlBody); });
+        return json(res, 200, out);
+      } catch (e) { return json(res, 500, { error: e.message }); }
+    }
     if (url.pathname === '/api/analyze' && req.method === 'POST') {
       const b = await readBody(req);
       if (!b.period || !b.period.from || !b.period.to) return json(res, 400, { error: 'period.from/to required' });
