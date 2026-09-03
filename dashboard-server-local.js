@@ -192,10 +192,11 @@ const server = http.createServer(async (req, res) => {
       try {
         const b = await readBody(req);
         const to = (b && b.to) || 'watidmahiya@gmail.com';
+        const key = (b && b.sbu) || null;   // send only this SBU (e.g. 'accl'), else all
         const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
         const live = r.ok ? (await r.json()) : { plants:{} };
         const cfg = loadAlertCfg();
-        const out = await alertEngine.sendTestMail(live, cfg, to, async (t, subject, htmlBody) => { return await gmailSend(t, subject, htmlBody); });
+        const out = await alertEngine.sendTestMail(live, cfg, to, async (t, subject, htmlBody) => { return await gmailSend(t, subject, htmlBody); }, key);
         return json(res, 200, out);
       } catch (e) { return json(res, 500, { error: e.message }); }
     }

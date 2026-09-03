@@ -165,19 +165,22 @@ async function evaluateAll(live, emailConfig, state, sendFn) {
   return { sent, state };
 }
 
-// Test mail: sends ONE consolidated report (all SBUs) to a single recipient
-async function sendTestMail(live, emailConfig, to, sendFn) {
+// Test mail: sends a consolidated report (optionally a single SBU) to a recipient
+async function sendTestMail(live, emailConfig, to, sendFn, sbuOrAll) {
   const today = new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
-  const body = Object.keys(live.plants||{}).map(key=>{
+  const keys = (sbuOrAll && live.plants && live.plants[sbuOrAll]) ? [sbuOrAll] : Object.keys(live.plants||{});
+  const body = keys.map(key=>{
     const plant=live.plants[key];
     const cfg=(emailConfig&&emailConfig[key])||{};
     const alerts=evaluateSbu(key, plant);
     const alertBox = alerts.length?`<div style="background:#fff7ed;border:1px solid #fed7aa;border-left:4px solid #f97316;border-radius:8px;padding:10px 12px;margin:8px 0"><b style="color:#9a3412">⚠ ${alerts.map(a=>a.type).join(', ')}</b> — <span style="color:#7c2d12">${alerts.map(a=>a.msg).join(' · ')}</span></div>`:'';
     return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:10px 0"><div style="font-weight:700;color:#0f766e;margin-bottom:4px">${cfg.name||key}</div>${alertBox}${buildReportHTML(plant, key)}</div>`;
   }).join('');
-  const html = wrapEmail(`Daily Performance Report — All SBUs (TEST ${today})`, `<div style="font-size:13px;color:#334155;margin-bottom:6px">Test email — full dashboard report for all SBUs. Generated <b>${today}</b>.</div>${body}`);
-  await sendFn([to], `📊 Akij Dashboard Report (TEST) — All SBUs · ${today}`, html);
-  return { to, sent: true, date: today };
+  const isSingle = keys.length===1;
+  const html = wrapEmail(`Daily Performance Report — ${isSingle?(cfgName(live,keys[0],emailConfig)):'All SBUs'} (TEST ${today})`, `<div style="font-size:13px;color:#334155;margin-bottom:6px">Test email — full dashboard report. Generated <b>${today}</b>.</div>${body}`);
+  await sendFn([to], `📊 Akij Dashboard Report (TEST) — ${isSingle?(cfgName(live,keys[0],emailConfig)):'All SBUs'} · ${today}`, html);
+  return { to, sent: true, date: today, sbu: isSingle?keys[0]:'ALL' };
 }
+function cfgName(live, key, cfg){ return (cfg&&cfg[key]&&cfg[key].name)||key; }
 
 module.exports = { evaluateAll, evaluateSbu, sendTestMail, defaultConfig, T };

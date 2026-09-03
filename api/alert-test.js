@@ -22,6 +22,7 @@ module.exports = async (req, res) => {
   try {
     const b = req.body || {};
     const to = (b && b.to) || 'watidmahiya@gmail.com';
+    const key = (b && b.sbu) || null;   // send only this SBU (e.g. 'accl')
     const dataHandler = require('./data.js');
     const dummyReq = { query: { live:'1' } };
     const dummyRes = { headers:{}, setHeader(k,v){ this.headers[k]=v; }, status(c){ this.statusCode=c; return this; }, json(o){ this.body=o; } };
@@ -29,7 +30,7 @@ module.exports = async (req, res) => {
     const live = dummyRes.body || { plants:{} };
     let cfg;
     try { cfg = JSON.parse(fs.readFileSync('/tmp/alert-config.json','utf8')); } catch { cfg = JSON.parse(JSON.stringify(alertEngine.defaultConfig)); cfg._deputy = process.env.ALERT_DEPUTY || 'deputy.coo@akijresource.com'; }
-    const out = await alertEngine.sendTestMail(live, cfg, to, gmailSend);
+    const out = await alertEngine.sendTestMail(live, cfg, to, gmailSend, key);
     return res.status(200).json(out);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 };
