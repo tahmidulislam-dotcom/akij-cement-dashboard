@@ -651,7 +651,7 @@ function render(){
   })();
 
   const kpis = [
-    {l:'Production OEE', v:pct(agg.OEE), s:agg.A==null?`Runtime capture starts ${P.meta.rtStart}`:`A ${pct(agg.A,0)} · P ${pct(agg.P,0)} · Q ${pct(agg.Q,0)}`, ac:'var(--teal)'},
+    {l:'Production OEE', v:pct(agg.OEE), s:(agg.A==null?`Runtime capture starts ${P.meta.rtStart}`:`A ${pct(agg.A,0)} · P ${pct(agg.P,0)} · Q ${pct(agg.Q,0)}`)+(function(){const t=oeeTgt((TO||P.meta.maxDate).slice(0,7));return (t!=null)?`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">OEE Target ${t}%</div>`:'';})(), ac:'var(--teal)'},
     {l:'Capacity Utilization', v:pct(agg.CU), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.cu,0)}`).join(' · '), ac:'var(--blue)'},
     {l:'NPT (Non-Productive Time)', v:pct(nptPct), s:`${fmt(nptMin/60,0)} hrs NPT vs ${fmt(loadingTot/60,0)} hrs loading`, ac:'var(--red)'},
     {l:'Yield', v:pct(agg.Q), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.y,1)}`).join(' · ')+tgtLine(YIELD_TGT!=null?YIELD_TGT+'%':null), ac:'var(--green)'},
