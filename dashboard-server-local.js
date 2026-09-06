@@ -47,6 +47,33 @@ async function getMssqlPool(){
   return mssqlPool;
 }
 
+/* ---------- iBOSDD (ARL MCP) helper — used for tables that live in iBOSDDD (not the DWH DB) ---------- */
+const ARL_MCP_URL = process.env.ARL_MCP_URL || "https://arl-mcp.ibos.io/mcp";
+const MES_KEY = process.env.MES_MCP_KEY || "ibos_mcp_sec_mes_5c9d0e1f_2a3b_4c5d_6e7f_8a9b0c1d2e3f_M3s8";
+const ASSET_KEY = process.env.ASSET_MCP_KEY || "ibos_mcp_sec_ast_7a1b2c3d_4e5f_6a7b_8c9d_0e1f2a3b4c5d_AsS3t";
+/* Parse the Markdown table returned by WriteRead/ExecuteReadOnlyQueryAsync MCP tool into an array of objects */
+function parseMarksTable(text){
+  if(!text) return [];
+  const lines=String(text).split('\n').filter(l=>/^\s*\|/.test(l));
+  const isSep=l=>{ const core=l.replace(/^\s*\|/,'').replace(/\|\s*$/,''); return core.replace(/[:\s|,-]/g,'').length===0; };
+  let headerIdx=-1; for(let i=0;i<lines.length;i++){ if(!isSep(lines[i])){ headerIdx=i; break; } }
+  if(headerIdx<0) return [];
+  const splitRow=l=>l.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim());
+  const headers=splitRow(lines[headerIdx]);
+  const rows=[];
+  for(let i=headerIdx+1;i<lines.length;i++){ const l=lines[i]; if(isSep(l)) continue;
+    const cells=splitRow(l); const row={}; headers.forEach((h,idx)=>{ row[h]=cells[idx]!=null?cells[idx].trim():''; }); rows.push(row);
+  }
+  return rows;
+}
+async function ibosQuery(sqlQuery, limit, key){
+  const rpc={jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"ExecuteReadOnlyQueryAsync",arguments:{sqlQuery, limit:limit||200}}};
+  const r=await fetch(ARL_MCP_URL,{method:"POST",headers:{"Content-Type":"application/json","X-API-Key":key||MES_KEY},body:JSON.stringify(rpc)});
+  const j=await r.json();
+  const txt = j && j.result && j.result.content && j.result.content[0] && j.result.content[0].text;
+  return parseMarksTable(txt);
+}
+
 /* ---------- Gmail OAuth (stored workspace-mcp token — handles both expiry formats) ---------- */
 let accessToken = null, tokenExp = 0;
 async function getAccessToken() {
@@ -459,6 +486,40 @@ const server = http.createServer(async (req, res) => {
             }
             live.generated = live.generated + ' · live '+latestDate;
           }
+          // Plan variance (unconditional — supports any selected From/To range regardless of new-date gate)
+          // Uses iBOSDD via ARL MCP (this table does not exist in the DWH DB)
+          try{
+            for(const P of PLANTS_LIVE){
+              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              try{
+                const pvRows=await ibosQuery(`SELECT CONVERT(varchar(10), dteServerDateTime, 23) d, LTRIM(RTRIM(ISNULL(strItemName,'Others'))) item, SUM(ISNULL(plannedQty,0)) planned, SUM(ISNULL(outputQty,0)) output, SUM(ISNULL(difference,0)) diff, COUNT(*) n FROM mes.tblProductionPlanVarianceIssue WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND CONVERT(varchar(10), dteServerDateTime,23)>=CONVERT(varchar(10),DATEADD(day,-62,GETDATE()),23) GROUP BY CONVERT(varchar(10), dteServerDateTime, 23), LTRIM(RTRIM(ISNULL(strItemName,'Others'))) ORDER BY CONVERT(varchar(10), dteServerDateTime, 23) DESC`);
+                const nv=v=>+String(v==null?0:v).replace(/,/g,'');
+                tgt.planVar=pvRows.map(x=>({d:x.d,item:x.item,planned:nv(x.planned),output:nv(x.output),diff:nv(x.diff),n:nv(x.n)}));
+                // Target Output (Ton) from productionEntryOee numShiftTargetQuantity, per date, matched to output UoM
+                try{
+                  const tRows=await ibosQuery(`SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numShiftTargetQuantity,0)) t FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, 200);
+                  const tk=new Map((tgt.tgtOut||[]).map(x=>[x.d+'|'+x.u,x]));
+                  tRows.forEach(x=>{ const row={d:x.d, u:(x.u||'').replace(/\s+/g,''), t:nv(x.t)}; tk.set(row.d+'|'+row.u, row); });
+                  tgt.tgtOut=[...tk.values()].sort((a,b)=>a.d<b.d?-1:1);
+                }catch(e){ console.error('  tgtOut '+P.key+' failed', e.message); tgt.tgtOut=tgt.tgtOut||[]; }
+              }catch(e){ console.error('  planVar '+P.key+' failed', e.message); tgt.planVar=[]; }
+            }
+          }catch(e){ console.error('planVar failed', e.message); }
+          // Preventive / Scheduled Maintenance (PeopleDesk ast): monthly target, MTD done, due-in-period (uses iBOSDD via Asset MCP)
+          try{
+            const mRows=await ibosQuery(`SELECT pm.intBusinessUnitId bu, SUM(CASE WHEN s.intScheduleMaintenanceStatusId=4 AND s.dteMaintenanceDate >= DATEADD(day,-(DAY(GETDATE())-1),CAST(GETDATE() AS date)) AND s.dteMaintenanceDate <= GETDATE() THEN 1 ELSE 0 END) doneMTD, SUM(CASE WHEN s.dteMaintenanceDate >= DATEADD(day,-(DAY(GETDATE())-1),CAST(GETDATE() AS date)) AND s.dteMaintenanceDate <= GETDATE() THEN 1 ELSE 0 END) dueMTD, COUNT(*) monthly FROM ast.tblPreventiveMaintenanceSchedule s WITH (NOLOCK) JOIN ast.tblPreventiveMaintenance pm WITH (NOLOCK) ON pm.intPreventiveMaintenanceId=s.intPreventiveMaintenanceId WHERE s.dteMaintenanceDate >= CAST(DATEADD(month, DATEDIFF(month,0,GETDATE()),0) AS date) AND s.dteMaintenanceDate <= DATEADD(month,1,CAST(DATEADD(month, DATEDIFF(month,0,GETDATE()),0) AS date)) AND s.isActive=1 GROUP BY pm.intBusinessUnitId`, 200, ASSET_KEY);
+            const mDailyRows=await ibosQuery(`SELECT pm.intBusinessUnitId bu, CONVERT(varchar(10),s.dteMaintenanceDate,23) d, SUM(CASE WHEN s.intScheduleMaintenanceStatusId=4 THEN 1 ELSE 0 END) done, COUNT(*) due, COUNT(CASE WHEN s.intScheduleMaintenanceStatusId=4 THEN 1 END) doneC FROM ast.tblPreventiveMaintenanceSchedule s WITH (NOLOCK) JOIN ast.tblPreventiveMaintenance pm WITH (NOLOCK) ON pm.intPreventiveMaintenanceId=s.intPreventiveMaintenanceId WHERE s.dteMaintenanceDate >= CAST(DATEADD(month, DATEDIFF(month,0,GETDATE()),0) AS date) AND s.dteMaintenanceDate <= DATEADD(month,1,CAST(DATEADD(month, DATEDIFF(month,0,GETDATE()),0) AS date)) AND s.isActive=1 GROUP BY pm.intBusinessUnitId, CONVERT(varchar(10),s.dteMaintenanceDate,23)`, 200, ASSET_KEY);
+            const nv=v=>+String(v==null?0:v).replace(/,/g,'');
+            const sbMap={}; mRows.forEach(r=>{ sbMap[nv(r.bu)]={monthly:nv(r.monthly), dueMTD:nv(r.dueMTD), doneMTD:nv(r.doneMTD)}; });
+            const dailyByBu={}; mDailyRows.forEach(r=>{ const bu=nv(r.bu); dailyByBu[bu]=dailyByBu[bu]||{}; dailyByBu[bu][r.d]={due:nv(r.due),done:nv(r.done)}; });
+            for(const P of PLANTS_LIVE){
+              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              const st=sbMap[P.bu]||{monthly:0,dueMTD:0,doneMTD:0};
+              const monthKey=new Date().toISOString().slice(0,7);
+              const daily=Object.entries(dailyByBu[P.bu]||{}).sort((a,b)=>a[0]<b[0]?-1:1).map(([d,v])=>({d,due:v.due,done:v.done}));
+              tgt.schedMaint={month:monthKey, monthly:st.monthly, dueMTD:st.dueMTD, doneMTD:st.doneMTD, daily};
+            }
+          }catch(e){ console.error('schedMaint failed', e.message); }
         }catch(e){ console.error('data merge failed', e.message); }
       }
       const plant=url.searchParams.get('plant');
@@ -633,7 +694,11 @@ const server = http.createServer(async (req, res) => {
             }catch{}
           }
           let ot=[]; try{ ot=(await Q(`SELECT CONVERT(varchar(10), dteOverTimeDate,23) d, ROUND(SUM(ISNULL(numOverTimeHour,0)),2) h, COUNT(*) e FROM saas.timeEmpOverTimeArc WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND ISNULL(isReject,0)=0 AND CONVERT(varchar(10), dteOverTimeDate,23)='${dhakaToday}' GROUP BY CONVERT(varchar(10), dteOverTimeDate,23)`)).map(x=>({d:x.d,h:+x.h,e:x.e})); }catch{}
-          out.plants[P.key]={bu:P.bu, daily: daily.map(x=>({d:x.d,u:(x.u||'Unit').replace(/\s+/g,''),l:Math.round(x.l),r:Math.round(x.r),a:Math.round(x.a*100)/100,g:Math.round(x.g*100)/100,cr:Math.round(x.cr*100)/100,cs:Math.round(x.cs*100)/100})), mohToday: Math.round(mohToday*100)/100, nptCat, nptBd, ot };
+          // Planning Achievement from Production Plan Variance (per plan-product, dated by dteServerDateTime)
+          let planVar=[]; try{
+            planVar=(await ibosQuery(`SELECT CONVERT(varchar(10), dteServerDateTime, 23) d, LTRIM(RTRIM(ISNULL(strItemName,'Others'))) item, SUM(ISNULL(plannedQty,0)) planned, SUM(ISNULL(outputQty,0)) output, SUM(ISNULL(difference,0)) diff, COUNT(*) n FROM mes.tblProductionPlanVarianceIssue WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND CONVERT(varchar(10), dteServerDateTime,23)>=CONVERT(varchar(10),DATEADD(day,-62,GETDATE()),23) GROUP BY CONVERT(varchar(10), dteServerDateTime, 23), LTRIM(RTRIM(ISNULL(strItemName,'Others'))) ORDER BY CONVERT(varchar(10), dteServerDateTime, 23) DESC`)).map(x=>({d:x.d,item:x.item,planned:+String(x.planned||0).replace(/,/g,''),output:+String(x.output||0).replace(/,/g,''),diff:+String(x.diff||0).replace(/,/g,''),n:x.n}));
+          }catch{}
+          out.plants[P.key]={bu:P.bu, daily: daily.map(x=>({d:x.d,u:(x.u||'Unit').replace(/\s+/g,''),l:Math.round(x.l),r:Math.round(x.r),a:Math.round(x.a*100)/100,g:Math.round(x.g*100)/100,cr:Math.round(x.cr*100)/100,cs:Math.round(x.cs*100)/100})), mohToday: Math.round(mohToday*100)/100, nptCat, nptBd, ot, planVar };
         }
         res.setHeader('Cache-Control','no-store');
         return json(res,200,out);

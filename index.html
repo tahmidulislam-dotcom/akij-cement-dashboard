@@ -160,7 +160,7 @@ tr:last-child td{border-bottom:none}
   <!-- Schedule Maintenance -->
   <div class="panel c6">
     <h3>Scheduled Maintenance</h3>
-    <div class="note">Planned maintenance hours &amp; events (NPT: Schedule Maintenance)</div>
+    <div class="note">Preventive / scheduled maintenance jobs — monthly target vs month-to-date done (due per day)</div>
     <div class="ch"><canvas id="chSm"></canvas></div>
   </div>
 
@@ -463,7 +463,7 @@ async function loadMachineOee(){
     const c=j.combined||{};
     const f0=n=>n==null?'—':Math.round(n).toLocaleString('en-US');
     // KPI cards: OEE + factors
-    const unit = (c && c.u) || (j.perMachine[0] && j.perMachine[0].u) || 't';
+    const unit = outLabel((c && c.u) || (j.perMachine[0] && j.perMachine[0].u) || 't');
     const shortName = cfg.label.split(' — ')[0];
     // Target Output from productionEntryOee (numShiftTargetQuantity) — machine-filtered (machDaily) when available
     let mTgt='';
@@ -472,7 +472,8 @@ async function loadMachineOee(){
       const dRows = md.length ? md : D.filter(x=>inRange(x.d));
       const byU0={}; dRows.forEach(x=>{byU0[x.u]=(byU0[x.u]||0)+((x.target!=null?x.target:x.t)||0);});   // raw target from db
       const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
-      const parts=Object.entries(byU0).map(([u,q])=>`${fmt(q,0)} ${u}`);
+      const tk=Object.keys(byU0).filter(validUom).filter(isTonUom); const keep0 = tk.length?tk:Object.keys(byU0).filter(validUom);   // productionEntryOee units, prefer Ton where DB has Ton
+      const parts=keep0.map(u=>`${fmt(byU0[u],0)} ${outLabel(u)}`);
       if(parts.length) mTgt=`Target Output ${parts.join(' · ')} / ${days} day${days>1?'s':''}`;
     }catch(e){}
     const kpi=[
@@ -560,6 +561,42 @@ function uomStats(rows){
 }
 function plantOEE(dailyRows){ return oeeAgg(dailyRows); }
 
+/* ---------- Ton unit preference (only where DB reports Ton/MetricTons) ---------- */
+const isTonUom = u => /ton/.test(String(u||'').replace(/\s+/g,'').toLowerCase());
+const tonLabel = u => isTonUom(u) ? 'Ton' : u;
+// Production-Entry OEE (mes.tblOeeProdWasteHeader) UoM per SBU — actual & target display must match this source
+// (the Arc-sourced daily can carry spurious "Pices"/extra units for some SBUs that do NOT appear in productionEntryOee)
+const OEE_UOM = {
+  accl:['Bag','Ton'], apfil:['Meter/Metre','Kilogram','Pices'], aafl:['Bag'],
+  aelflour:['Bag','Kilogram'], ail:['MetricTons'], absl:['MetricTons'],
+  'armcl-ngnj':['CubicFoot'], 'armcl-dhour':['CubicFoot'], 'armcl-rup':['CubicFoot'], 'armcl-ctg':['CubicFoot'], 'armcl-gaz':['CubicFoot'],
+  hrml:['Bag'], fal:['Bag'],
+  // aeldal / alel left out -> no filter (keep native)
+};
+const nu = s => String(s||'').replace(/[^a-z0-9]/gi,'').toLowerCase();
+const OEE_NORM = Object.fromEntries(Object.entries(OEE_UOM).map(([k,v])=>[k, v.map(nu)]));
+const validUom = u => { const w=OEE_NORM[PLANT]; return !w || w.includes(nu(u)); };
+// SBUs whose productionEntryOee page reports output in Ton even though strUOMName says Bag (value is already ton). Add keys here to force "Ton".
+const TON_SBUS = new Set(['hrml','fal','aelflour','aafl']);
+const outLabel = u => (isTonUom(u) || TON_SBUS.has(PLANT)) ? 'Ton' : u;
+// Build an output string: if every unit maps to Ton, show ONE summed Ton; else list each unit.
+function fmtOutput(stats){
+  if(!stats) return '—';
+  if(TON_SBUS.has(PLANT) || stats.every(x=>outLabel(x.u)==='Ton')){
+    const tot = stats.reduce((s,x)=>s+(x.a||0),0);
+    return `${fmt(tot,0)} Ton`;
+  }
+  return stats.map(x=>`${fmt(x.a,0)} ${outLabel(x.u)}`).join(' · ');
+}
+// If any Ton/MetricTons uom present, keep ONLY the Ton uom(s); restrict to production-Entry OEE units; else keep as-is
+function tonPref(arr, uKey){
+  const key = uKey||'u';
+  const a = (arr||[]).filter(x=>validUom(x[key]));   // restrict to productionEntryOee units
+  if(TON_SBUS.has(PLANT)) return a;                    // SBU reports in Ton (relabel via outLabel)
+  const t = a.filter(x=>isTonUom(x[key]));            // prefer Ton where DB has Ton/MetricTons
+  return t.length ? t : a;
+}
+
 /* ---------- render ---------- */
 function render(){
   Object.values(charts).forEach(c=>c&&c.destroy());
@@ -612,7 +649,9 @@ function render(){
   /* ---- KPI cards ---- */
   const uSt=uomStats(D);
   const planTot=pvCard.planTot, actTot=pvCard.actTot;
-  const planAch = pvCard.ach;
+  const pvStat = planVarStat(FROM,TO);
+  // Planning Achievement: avg % across all products from production-plan variance when available, else plan-vs-actual
+  const planAch = pvStat.avgPct!=null ? pvStat.avgPct/100 : pvCard.ach;
 
   // Targets (from iBOSDD + fixed defaults). Excluded (no target) for ARMCL all plants + ABSL.
   const NO_TARGET_PLANTS = ['armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','absl'];
@@ -624,18 +663,25 @@ function render(){
   const srcRows = (P.machDaily||[]).filter(x=>inRange(x.d));
   const aSrc = srcRows.length ? srcRows : D;
   const aStats = uomStats(aSrc.map(x=>({d:x.d,u:x.u,a:x.actual!=null?x.actual:x.a,g:x.a!=null?x.a:(x.g||0),cs:(x.cs||0)})));
-  const goodVal = aStats.length ? aStats.map(x=>`${fmt(x.a,0)} ${x.u}`).join(' · ') : '—';
+  const goodPref = tonPref(aStats); // prefer Ton where DB has Ton/MetricTons
+  const goodVal = fmtOutput(goodPref);
   const tgtLine = (v,suffix)=> (v==null?'':`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${v}${suffix||''}</div>`);
   // Target Output from productionEntryOee (numShiftTargetQuantity) — sum over selected range, raw from db
-  const tgtOutRows = srcRows.length ? srcRows : D.filter(x=>x.t!=null);
+  const tgtOutRows = ((P.tgtOut||[]).length ? (P.tgtOut||[]).filter(x=>inRange(x.d)).map(x=>({d:x.d, u:x.u, t:x.t})) : (srcRows.length ? srcRows : D.filter(x=>x.t!=null)));
   const prodLine = ()=> {
     if(!tgtOutRows.length) return '';
     const days = Math.max(1, Math.round((new Date(TO)-new Date(FROM))/864e5)+1);
     const byU = {};
     tgtOutRows.forEach(x=>{ byU[x.u]=(byU[x.u]||0)+((x.target!=null?x.target:x.t)||0); });   // raw target from DB, no conversion
-    const parts = Object.entries(byU).map(([u,q])=>`${fmt(q,0)} ${u}`);
-    const total = parts.length?parts.join(' · '):'—';
-    let perDay = 0; Object.entries(byU).forEach(([u,q])=>perDay+=q);
+    const tKeys = Object.keys(byU).filter(validUom).filter(isTonUom);
+    const keep = tKeys.length ? tKeys : Object.keys(byU).filter(validUom);   // productionEntryOee units, prefer Ton where DB has Ton
+    let total, perDay=0;
+    if(TON_SBUS.has(PLANT) || keep.every(u=>outLabel(u)==='Ton')){
+      const tot=keep.reduce((s,u)=>s+byU[u],0); total=`${fmt(tot,0)} Ton`; perDay=tot;
+    } else {
+      total=keep.map(u=>`${fmt(byU[u],0)} ${outLabel(u)}`).join(' · ') || '—';
+      keep.forEach(u=>perDay+=byU[u]);
+    }
     return `<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target Output ${total} · ${fmt(perDay/days,0)}/day</div>`;
   };
   // Waste actual + target (iBOSDD) — today's value in a separate card
@@ -660,8 +706,9 @@ function render(){
     {l:'Capacity Utilization', v:pct(agg.CU), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.cu,0)}`).join(' · '), ac:'var(--blue)'},
     {l:'NPT (Non-Productive Time)', v:pct(nptPct), s:`${fmt(nptMin/60,0)} hrs NPT vs ${fmt(loadingTot/60,0)} hrs loading`, ac:'var(--red)'},
     {l:'Yield', v:pct(agg.Q), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.y,1)}`).join(' · ')+tgtLine(YIELD_TGT!=null?YIELD_TGT+'%':null), ac:'var(--green)'},
-    {l:'Planning Achievement', v:pct(planAch), s:`${fmt(actTot,0)} vs ${fmt(planTot,0)} ${domUom||''} planned${pvCard.coverage<0.95?` · ${(pvCard.coverage*100).toFixed(0)}% UoM-matched`:''}`+tgtLine(PLAN_TGT!=null?PLAN_TGT+'%':null), ac:'var(--amber)'},
-    {l:'Scheduled Maintenance', v:fmt(smMin/60,0)+' h', s:`${smEvt} planned events`, ac:'var(--blue)'},
+    {l:'Planning Achievement', v:(planAch!=null?pct(planAch):'—'), s:(pvStat.n?`${pvStat.totDiff>=0?'+':''}${fmt(pvStat.totDiff,0)} diff (out − plan) · avg ${pvStat.avgPct!=null?pct(pvStat.avgPct):'—'} of ${pvStat.n} product line(s)`: 'No plan variance data in range')+tgtLine(PLAN_TGT!=null?PLAN_TGT+'%':null), ac:'var(--amber)'},
+    {l:'Scheduled Maintenance', v:(function(){ const sm=P.schedMaint; return sm?`${fmt(sm.doneMTD,0)} / ${fmt(sm.monthly,0)}`:(fmt(smMin/60,0)+' h'); })(), s:(function(){ const sm=P.schedMaint; if(sm){ const asOf=(P.meta.maxDate||'').slice(0,10); const m=sm.month||'';
+      return `${fmt(sm.monthly,0)} monthly target · ${fmt(sm.dueMTD,0)} due (${m}-01 → ${asOf||m})`; } return `${smEvt} planned events`; })(), ac:'var(--blue)'},
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},
     {l:'Actual Output', v:goodVal, s:prodLine(), ac:'var(--teal)'},
     {l:'Waste', v:(wasteVal.v||'—'), s:(wasteVal.s||''), ac:'var(--red)'},
@@ -748,14 +795,15 @@ function render(){
       plugins:{legend:{position:'right',...legendOpt},tooltip:{callbacks:{label:c=>`${c.label}: ${c.parsed} actions`}}}}});
 
 
-  /* ---- Scheduled maintenance ---- */
-  const smBk={}; P.nptCat.filter(r=>inRange(r.d)&&r.c==='Schedule Maintenance').forEach(r=>{const b=bucket(r.d); smBk[b]=smBk[b]||{m:0,e:0}; smBk[b].m+=r.m; smBk[b].e+=r.e;});
-  charts.sm=new Chart($('chSm'),{data:{labels:bk,datasets:[
-    {type:'bar',label:'SM Hours',data:bk.map(b=>smBk[b]?smBk[b].m/60:null),backgroundColor:'rgba(56,189,248,.65)',borderRadius:5},
-    {type:'line',label:'Events',data:bk.map(b=>smBk[b]?smBk[b].e:null),borderColor:'#2dd4bf',yAxisID:'y1',tension:.3,borderWidth:2,pointRadius:2},
+  /* ---- Scheduled maintenance (preventive schedule: due vs done per day) ---- */
+  const smd=(P.schedMaint&&P.schedMaint.daily)||[];
+  const smLabels=smd.map(x=>x.d.slice(8)+''+x.d.slice(5,7)); /// day-Month
+  charts.sm=new Chart($('chSm'),{data:{labels:smLabels,datasets:[
+    {type:'bar',label:'Due',data:smd.map(x=>x.due),backgroundColor:'rgba(56,189,248,.55)',borderRadius:5},
+    {type:'bar',label:'Done',data:smd.map(x=>x.done),backgroundColor:'rgba(45,212,191,.8)',borderRadius:5},
   ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
-    plugins:{legend:{position:'top',...legendOpt},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y,0)}`}}},
-    scales:{y:{...gridOpt},y1:{position:'right',grid:{drawOnChartArea:false}},x:gridOpt}}});
+    plugins:{legend:{position:'top',...legendOpt},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y,0)} jobs`}}},
+    scales:{y:{...gridOpt,beginAtZero:true},x:gridOpt}}});
 
   /* ---- MOH ---- */
   const mohBk={}; mohRows.forEach(m=>{mohBk[m.k]={c:m.c,mat:m.mat,q:m.q,gross:m.gross,pool:m.pool};});
@@ -971,6 +1019,20 @@ function planVsActual(from,to){
   const domUom=uoms.slice().sort((a,b)=>Object.values(goodM[b]).reduce((x,y)=>x+y,0)-Object.values(goodM[a]).reduce((x,y)=>x+y,0))[0]||null;
   return {planTot:Math.round(planTot),actTot:Math.round(matchedAct),ach,domUom,goodM,coverage:planTot>0?matchedPlan/planTot:1};
 }
+/* Plan variance stat: total difference (output-planned) + avg % across all products for day/range */
+function planVarStat(from,to){
+  const rows=(P.planVar||[]).filter(r=>r.d>=from&&r.d<=to);
+  if(!rows.length) return {totDiff:0,totPlan:0,totOut:0,avgPct:null,n:0};
+  let totDiff=0,totPlan=0,totOut=0,pctSum=0,pctN=0;
+  rows.forEach(r=>{ totDiff+=r.diff||0; totPlan+=r.planned||0; totOut+=r.output||0;
+    if((r.planned||0)>0){ pctSum+=(r.output||0)/(r.planned||0)*100; pctN++; } });
+  return {totDiff:Math.round(totDiff),totPlan:Math.round(totPlan),totOut:Math.round(totOut),avgPct:pctN>0?pctSum/pctN:null,n:rows.length};
+}
+function planVarDaily(from,to){
+  const out={};
+  (P.planVar||[]).filter(r=>r.d>=from&&r.d<=to).forEach(r=>{ out[r.d]=out[r.d]||{diff:0,plan:0,out:0,pctN:0,pctSum:0}; const o=out[r.d]; o.diff+=(r.diff||0); o.plan+=(r.planned||0); o.out+=(r.output||0); if((r.planned||0)>0){o.pctN++;o.pctSum+=(r.output||0)/(r.planned||0)*100;} });
+  return Object.entries(out).sort((a,b)=>a[0]<b[0]?-1:1).map(([d,v])=>({d,diff:Math.round(v.diff),plan:Math.round(v.plan),out:Math.round(v.out),pct:v.pctN>0?v.pctSum/v.pctN:null}));
+}
 function aiQuick(n){ const to=shiftDate(P.meta.maxDate,-1), from=shiftDate(to,-(n-1));
   $('aiFrom').value=from; $('aiTo').value=to; }
 function aiMonth(){ const d=P.meta.maxDate; $('aiFrom').value=d.slice(0,8)+'01'; $('aiTo').value=d; }
@@ -986,17 +1048,19 @@ function rangeAgg(from,to){
   P.nptCat.filter(r=>r.d>=from&&r.d<=to).forEach(r=>{cat[r.c]=cat[r.c]||{m:0,e:0};cat[r.c].m+=r.m;cat[r.c].e+=r.e;nptMin+=r.m;});
   let smMin=0,smEvt=0; P.nptCat.filter(r=>r.d>=from&&r.d<=to&&r.c==='Schedule Maintenance').forEach(r=>{smMin+=r.m;smEvt+=r.e;});
   const pv=planVsActual(from,to);
+  const pvStat=planVarStat(from,to);
   let mohTot=0; P.moh.filter(m=>m.k>=from.slice(0,7)&&m.k<=to.slice(0,7)).forEach(m=>mohTot+=m.c);
   const o=plantOEE(D);
   const runtimeHrs=D.reduce((s,r)=>s+r.r,0)/60, loadingHrs=D.reduce((s,r)=>s+r.l,0)/60;
   const uSt=uomStats(D);
   const domU=uSt[0]||{u:null,q:0};
-  const goodMain=uSt.slice(0,2).map(x=>({u:x.u,q:Math.round(x.q)}));
+  const goodPref=tonPref(uSt, 'u').slice(0,2);
+  const goodMain=(TON_SBUS.has(PLANT)||goodPref.every(x=>outLabel(x.u)==='Ton')) ? [{u:'Ton',q:Math.round(goodPref.reduce((s,x)=>s+x.q,0))}] : goodPref.map(x=>({u:outLabel(x.u),q:Math.round(x.q)}));
   const prodDays=Object.keys(dailyNpt).length||1;
   return {from,to, o, nptMin, nptPct: loadingHrs>0?nptMin/(loadingHrs*60):null, cats:Object.entries(cat).sort((a,b)=>b[1].m-a[1].m).slice(0,8).map(([k,v])=>({name:k,minutes:Math.round(v.m),hours:+(v.m/60).toFixed(1),events:v.e})),
     top5:Object.entries(bd).sort((a,b)=>b[1].m-a[1].m).slice(0,5).map(([k,v])=>({name:k,hours:+(v.m/60).toFixed(1),events:v.e})),
-    smHrs:+(smMin/60).toFixed(1), smEvt,
-    planTot:pv.planTot, actTot:pv.actTot, planAch:pv.ach!=null?+(pv.ach*100).toFixed(1):null,
+    smHrs:+(smMin/60).toFixed(1), smEvt, schedMaint:(P.schedMaint||null),
+    planTot:pv.planTot, actTot:pv.actTot, planAch:((pvStat.avgPct!=null?pvStat.avgPct:pv.ach!=null?pv.ach*100:null)!=null?+((pvStat.avgPct!=null?pvStat.avgPct:pv.ach!=null?pv.ach*100:null)).toFixed(1):null), planVarDiff:pvStat.totDiff, planVarAvg:pvStat.avgPct!=null?+(pvStat.avgPct).toFixed(1):null, planVarN:pvStat.n,
     mohTot, goodMain, domUom:domU.u, runtimeHrs, loadingHrs, prodDays};
 }
 function makePayload(from,to){
@@ -1011,7 +1075,9 @@ function makePayload(from,to){
       performance_pct:s.o.P!=null?+(s.o.P*100).toFixed(1):null, quality_yield_pct:s.o.Q!=null?+(s.o.Q*100).toFixed(1):null,
       capacity_utilization_pct:s.o.CU!=null?+(s.o.CU*100).toFixed(1):null, npt_pct:s.nptPct!=null?+(s.nptPct*100).toFixed(1):null,
       scheduled_maintenance_hrs:s.smHrs, scheduled_maintenance_events:s.smEvt,
+      sched_maint_monthly:(s.schedMaint&&s.schedMaint.monthly)||null, sched_maint_done_mtd:(s.schedMaint&&s.schedMaint.doneMTD)||null, sched_maint_due:(s.schedMaint&&s.schedMaint.dueMTD)||null,
       planning_achievement_pct:s.planAch, plan_qty:s.planTot, actual_qty:s.actTot, output_uom:s.domUom,
+      plan_difference:s.planVarDiff, plan_avg_percent:s.planVarAvg, plan_variance_lines:s.planVarN,
       moh_cost_bdt:Math.round(s.mohTot), good_output:s.goodMain},
     prev_period_kpis:{from:prevFrom,to:prevTo,
       oee_pct:p.o.OEE!=null?+(p.o.OEE*100).toFixed(1):null, npt_pct:p.nptPct!=null?+(p.nptPct*100).toFixed(1):null,
@@ -1061,7 +1127,7 @@ function buildReport(p){
   ${tr('Capacity Utilization',k.capacity_utilization_pct!=null?k.capacity_utilization_pct+'%':'—',arr(null),assess(k.capacity_utilization_pct,70,50))}
   ${tr('NPT',k.npt_pct!=null?k.npt_pct+'%':'—',arr(dl.npt_pp,' pp'),assessInv(k.npt_pct,35,50))}
   ${tr('Planning Achievement',k.planning_achievement_pct!=null?k.planning_achievement_pct+'%':'—','—',assess(k.planning_achievement_pct,95,85))}
-  ${tr('Scheduled Maintenance',f0(k.scheduled_maintenance_hrs)+' h','—',k.scheduled_maintenance_events+' events')}
+  ${tr('Scheduled Maintenance',(k.sched_maint_monthly!=null?`${f0(k.sched_maint_done_mtd)} / ${f0(k.sched_maint_monthly)}`:(f0(k.scheduled_maintenance_hrs)+' h')),'—',(k.sched_maint_monthly!=null?`${f0(k.sched_maint_due)} due MTD · ${f0(k.sched_maint_monthly)} monthly target`:(k.scheduled_maintenance_events+' events')))}
   ${tr('MOH Cost',k.moh_cost_bdt?'৳'+f0(k.moh_cost_bdt):'—','—',k.moh_cost_bdt?'booked':'no bookings')}
   </table>`;
   /* exec summary */
@@ -1090,7 +1156,7 @@ function buildReport(p){
   <h2>OEE &amp; Capacity Commentary</h2><p>${k.oee_pct!=null?`OEE ${k.oee_pct}% decomposes into Availability ${k.availability_pct??'—'}%, Performance ${k.performance_pct??'—'}% and Quality ${k.quality_yield_pct??'—'}%. ${k.performance_pct!=null&&k.performance_pct<70?'Performance is the biggest drag — machine speeds/set-points vs rated capacity need verification.':''} ${k.availability_pct!=null&&k.availability_pct<80?'Availability losses point to stoppages — cross-check NPT categories below.':''}`:`Machine runtime (required for OEE/Availability/Performance) is captured in MES for this plant only from ${p.rt_start||'recently'}; for this range those metrics are marked '—' as data-unavailable, not as poor performance.`} Capacity utilization at ${k.capacity_utilization_pct??'—'}% of rated nameplate across ${p.period.days} day(s).</p>
   <h2>Losses &amp; Breakdown Analysis</h2><p>Top 5 unplanned downtime sources:</p><ol>${p.top_breakdowns.map(b=>`<li><b>${b.name}</b> — ${b.hours} h / ${b.events} events</li>`).join('')||'<li>No breakdown events logged</li>'}</ol>
   <p>NPT categories: ${p.npt_categories.map(c=>`${c.name} ${c.hours} h`).join(' · ')||'none logged'}.</p>
-  <h2>Maintenance Effectiveness</h2><p>Scheduled maintenance ${f0(k.scheduled_maintenance_hrs)} h (${k.scheduled_maintenance_events} planned events) in period. ${k.scheduled_maintenance_hrs>0?`Scheduled maintenance logged — PM calendar compliance.`:''}</p>
+  <h2>Maintenance Effectiveness</h2><p>${k.sched_maint_monthly!=null?`Preventive/scheduled maintenance: <b>${f0(k.sched_maint_done_mtd)} of ${f0(k.sched_maint_monthly)}</b> monthly jobs done MTD (${f0(k.sched_maint_due)} due in period).`:`Scheduled maintenance ${f0(k.scheduled_maintenance_hrs)} h (${k.scheduled_maintenance_events} planned events) in period.`} ${k.sched_maint_monthly>0?'PM calendar compliance tracking.':''}</p>
   <h2>Planning &amp; Output</h2><p>Good output: ${k.good_output&&k.good_output.length?k.good_output.map(g=>`<b>${f0(g.q)} ${g.u}</b>`).join(' + '):'no output recorded'}. ${k.planning_achievement_pct!=null?`Planning achievement <b>${k.planning_achievement_pct}%</b> against ${f0(k.plan_qty)} planned ${k.output_uom||''}.`:'No production plan loaded for this range.'}</p>
   <h2>Recommendations</h2><ol>${R.map(r=>`<li>${r}</li>`).join('')}</ol>
   <p style="color:#777;font-size:11px;margin-top:14px">Source: ${p.company} DWH (MES OEE/NPT, production planning, HRMS OT, production costing) · Analysis: built-in analyst engine · ${new Date().toLocaleString()}</p>`;

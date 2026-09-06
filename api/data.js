@@ -169,6 +169,56 @@ async function mergeLive(live) {
   return live;
 }
 
+// Planning Achievement from Production Plan Variance (per plan-product, dated by dteServerDateTime)
+async function injectPlanVar(live){
+  try{
+    for(const P of PLANTS){
+      try{
+        const pr=await callMCP('mes','ExecuteReadOnlyQueryAsync',{ sqlQuery:
+          `SELECT CONVERT(varchar(10), dteServerDateTime, 23) d, LTRIM(RTRIM(ISNULL(strItemName,'Others'))) item, SUM(ISNULL(plannedQty,0)) planned, SUM(ISNULL(outputQty,0)) output, SUM(ISNULL(difference,0)) diff, COUNT(*) n FROM mes.tblProductionPlanVarianceIssue WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND dteServerDateTime > DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10), dteServerDateTime, 23), LTRIM(RTRIM(ISNULL(strItemName,'Others'))) ORDER BY CONVERT(varchar(10), dteServerDateTime, 23) DESC`, limit:3000});
+        if(pr.length && live.plants[P.key]) live.plants[P.key].planVar=pr.map(x=>({d:x.d,item:x.item,planned:num(x.planned),output:num(x.output),diff:num(x.diff),n:+x.n}));
+      }catch{}
+    }
+  }catch(e){ console.error('planVar failed', e.message); }
+  return live;
+}
+
+// Preventive / Scheduled Maintenance (PeopleDesk ast): monthly target, MTD done, due-in-period
+async function injectSchedMaint(live){
+  try{
+    const monthStart=((new Date().toISOString().slice(0,7))+'-01');
+    const monthEnd=(((y,m)=>{const d=new Date(Date.UTC(y,m,0));return y+'-'+String(m).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');})(+new Date().getUTCFullYear(), +new Date().getUTCMonth()+1));
+    const mRows=await callMCP('asset','ExecuteReadOnlyQueryAsync',{ sqlQuery:
+      `SELECT pm.intBusinessUnitId bu, SUM(CASE WHEN s.intScheduleMaintenanceStatusId=4 AND s.dteMaintenanceDate >= DATEADD(day,-(DAY(GETDATE())-1),CAST(GETDATE() AS date)) AND s.dteMaintenanceDate <= GETDATE() THEN 1 ELSE 0 END) doneMTD, SUM(CASE WHEN s.dteMaintenanceDate >= DATEADD(day,-(DAY(GETDATE())-1),CAST(GETDATE() AS date)) AND s.dteMaintenanceDate <= GETDATE() THEN 1 ELSE 0 END) dueMTD, COUNT(*) monthly FROM ast.tblPreventiveMaintenanceSchedule s WITH (NOLOCK) JOIN ast.tblPreventiveMaintenance pm WITH (NOLOCK) ON pm.intPreventiveMaintenanceId=s.intPreventiveMaintenanceId WHERE s.dteMaintenanceDate >= CAST(DATEADD(month, DATEDIFF(month,0,GETDATE()),0) AS date) AND s.dteMaintenanceDate <= DATEADD(month,1,CAST(DATEADD(month, DATEDIFF(month,0,GETDATE()),0) AS date)) AND s.isActive=1 GROUP BY pm.intBusinessUnitId`, limit:200});
+    const mDailyRows=await callMCP('asset','ExecuteReadOnlyQueryAsync',{ sqlQuery:
+      `SELECT pm.intBusinessUnitId bu, CONVERT(varchar(10),s.dteMaintenanceDate,23) d, SUM(CASE WHEN s.intScheduleMaintenanceStatusId=4 THEN 1 ELSE 0 END) done, COUNT(*) due FROM ast.tblPreventiveMaintenanceSchedule s WITH (NOLOCK) JOIN ast.tblPreventiveMaintenance pm WITH (NOLOCK) ON pm.intPreventiveMaintenanceId=s.intPreventiveMaintenanceId WHERE s.dteMaintenanceDate >= CAST(DATEADD(month, DATEDIFF(month,0,GETDATE()),0) AS date) AND s.dteMaintenanceDate <= DATEADD(month,1,CAST(DATEADD(month, DATEDIFF(month,0,GETDATE()),0) AS date)) AND s.isActive=1 GROUP BY pm.intBusinessUnitId, CONVERT(varchar(10),s.dteMaintenanceDate,23)`, limit:200});
+    const sbMap={}; mRows.forEach(r=>{ sbMap[num(r.bu)]={monthly:num(r.monthly), dueMTD:num(r.dueMTD), doneMTD:num(r.doneMTD)}; });
+    const dailyByBu={}; mDailyRows.forEach(r=>{ const bu=num(r.bu); dailyByBu[bu]=dailyByBu[bu]||{}; dailyByBu[bu][r.d]={due:num(r.due),done:num(r.done)}; });
+    const monthKey=new Date().toISOString().slice(0,7);
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; const st=sbMap[P.bu]||{monthly:0,dueMTD:0,doneMTD:0};
+      const daily=Object.entries(dailyByBu[P.bu]||{}).sort((a,b)=>a[0]<b[0]?-1:1).map(([d,v])=>({d,due:v.due,done:v.done}));
+      t.schedMaint={month:monthKey, monthly:st.monthly, dueMTD:st.dueMTD, doneMTD:st.doneMTD, daily}; }
+  }catch(e){ console.error('schedMaint failed', e.message); }
+  return live;
+}
+
+// Target Output (Ton) series from productionEntryOee numShiftTargetQuantity, per date + UoM
+async function injectTgtOut(live){
+  try{
+    const normU=n=>String(n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue;
+      try{
+        const tRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{ sqlQuery:
+          `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numShiftTargetQuantity,0)) t FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000});
+        const tk=new Map((t.tgtOut||[]).map(x=>[x.d+'|'+x.u,x]));
+        tRows.forEach(x=>{ const row={d:x.d,u:(x.u||'').replace(/\s+/g,''),t:num(x.t)}; tk.set(row.d+'|'+row.u,row); });
+        t.tgtOut=[...tk.values()].sort((a,b)=>a.d<b.d?-1:1);
+      }catch{}
+    }
+  }catch(e){ console.error('tgtOut failed', e.message); }
+  return live;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');
@@ -181,6 +231,9 @@ module.exports = async (req, res) => {
     let out;
     try { out = await injectMOH(data); } catch { out = data; }
     try { out = await injectProductTargets(out); } catch {}
+    try { out = await injectPlanVar(out); } catch {}
+    try { out = await injectSchedMaint(out); } catch {}
+    try { out = await injectTgtOut(out); } catch {}
     if (plant) { const p = out.plants?.[plant]; if (!p) return res.status(404).json({error:`Plant ${plant} not found`, available: out.order}); return res.status(200).json({plant:p, meta:p.meta, generated:out.generated}); }
     return res.status(200).json(out);
   } catch (e) { return res.status(500).json({ error: e.message }); }

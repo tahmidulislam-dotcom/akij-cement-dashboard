@@ -1,0 +1,33 @@
+{
+  "date": "2026-09-06",
+  "counts": {
+    "accl": {
+      "c": 1,
+      "kinds": {}
+    },
+    "apfil": {
+      "c": 1,
+      "kinds": {}
+    },
+    "aafl": {
+      "c": 1,
+      "kinds": {}
+    },
+    "aelflour": {
+      "c": 1,
+      "kinds": {}
+    },
+    "ail": {
+      "c": 1,
+      "kinds": {}
+    },
+    "hrml": {
+      "c": 1,
+      "kinds": {}
+    },
+    "fal": {
+      "c": 1,
+      "kinds": {}
+    }
+  }
+}

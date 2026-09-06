@@ -3,6 +3,7 @@ const MCP_URL = process.env.ARL_MCP_URL || 'https://arl-mcp.ibos.io/mcp';
 const KEYS = {
   mes:     process.env.MCP_KEY_MES     || 'ibos_mcp_sec_mes_5c9d0e1f_2a3b_4c5d_6e7f_8a9b0c1d2e3f_M3s8',
   finance: process.env.MCP_KEY_FINANCE || 'ibos_mcp_sec_fin_9c3d4e5f_6a7b_8c9d_0e1f_2a3b4c5d6e7f_F1n4',
+  asset:   process.env.MCP_KEY_ASSET   || 'ibos_mcp_sec_ast_7a1b2c3d_4e5f_6a7b_8c9d_0e1f2a3b4c5d_AsS3t',
 };
 
 async function callMCP(domain, tool, args) {
