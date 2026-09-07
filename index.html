@@ -138,6 +138,12 @@ tr:last-child td{border-bottom:none}
   <div class="panel" id="vrmPanel" style="display:none">
     <h3>⚙️ Machine OEE Detail</h3>
     <div class="note"><span id="vrmNote">loading…</span></div>
+    <div id="vrmFilters" style="display:none;margin:8px 0;font-size:12px">
+      <label style="font-weight:700;color:var(--accent);margin-right:8px">Machines:</label>
+      <select id="vrmSel" multiple size="6" onchange="loadMachineOee()" style="background:#0b1220;color:#cdd7ea;border:1px solid #233048;border-radius:8px;padding:6px;font-size:12px;min-width:220px"></select>
+      <button class="btn ghost" id="vrmApply" onclick="loadMachineOee()" style="margin-left:8px;padding:4px 10px;font-size:11.5px">↻ Apply</button>
+      <button class="btn ghost" id="vrmAll" onclick="vrmSelectAll(true)&&loadMachineOee()" style="margin-left:6px;padding:4px 10px;font-size:11.5px">All</button>
+    </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:10px 0" id="vrmKpi"></div>
     <div class="ch tall"><canvas id="chVrm"></canvas></div>
     <div id="vrmCalc" style="margin-top:14px;font-size:12.5px;color:#cdd7ea"></div>
@@ -480,19 +486,34 @@ const MACHINE_OEE_TITLES = {
   ail:   { query:'shopfloor=Re-Rolling Shop Floor', label:'Rolling (Re-Rolling Shop Floor) — combined', empty:'No Rolling data' },
   apfil: { query:'pattern=Loom%',                    label:'Loom (all units) — combined', empty:'No Loom data' },
 };
+const ACCL_MACHINES = ['VRM-1','VRM-2','Packer-01','Packer-02','Packer-03','Packer-04','Packer-05','Bulk Loader-01'];
+function vrmSelectAll(sel){ const s=$('vrmSel'); if(!s) return false; Array.from(s.options).forEach(o=>o.selected=sel); return true; }
 async function loadMachineOee(){
   const panel=$('vrmPanel'); if(!panel) return;
   const cfg=MACHINE_OEE_TITLES[PLANT];
   if(!cfg){ panel.style.display='none'; return; }
   panel.style.display='';
+  // Machine filter (ACCL): populate an "all machines" select, allow multi-select -> live refetch
+  const fbox=$('vrmFilters');
+  if(PLANT==='accl' && fbox){
+    fbox.style.display='';
+    const sel=$('vrmSel');
+    if(sel && sel.options.length===0){ sel.innerHTML=ACCL_MACHINES.map(m=>`<option value="${m}">${m}</option>`).join(''); Array.from(sel.options).forEach(o=>o.selected=true); }
+  } else if(fbox){ fbox.style.display='none'; }
   try{
     let from=(FROM||P.meta.minDate), to=(TO||P.meta.maxDate);
     const days=Math.round((new Date(to)-new Date(from))/864e5)+1;
     if(days>92){ from=shiftDate(to,-91); }
-    const r=await fetch(`${API}/api/machine-oee?bu=${P.meta.bu}&${cfg.query}&from=${from}&to=${to}`,{cache:'no-store'});
+    let query=cfg.query;
+    if(PLANT==='accl'){
+      const chosen=Array.from($('vrmSel')?$('vrmSel').selectedOptions:[]).map(o=>o.value);
+      query = chosen.length ? ('machines='+chosen.join(',')) : cfg.query;
+    }
+    const r=await fetch(`${API}/api/machine-oee?bu=${P.meta.bu}&${query}&from=${from}&to=${to}`,{cache:'no-store'});
     const j=await r.json();
     if(j.error||!j.machines||!j.machines.length){ $('vrmNote').textContent=cfg.empty; panel.style.display='none'; return; }
-    $('vrmNote').textContent=`${cfg.label} · ${j.from} → ${j.to}`;
+    const selLabel=(PLANT==='accl'&&Array.from($('vrmSel')?$('vrmSel').selectedOptions:[]).map(o=>o.value).join(' + '))||cfg.label;
+    $('vrmNote').textContent=`${selLabel} · ${j.from} → ${j.to}`;
     const pct=v=>v!=null?(v*100).toFixed(2)+'%':'—';
     const c=j.combined||{};
     const f0=n=>n==null?'—':Math.round(n).toLocaleString('en-US');
