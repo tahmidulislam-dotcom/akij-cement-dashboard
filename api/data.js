@@ -270,37 +270,37 @@ async function injectNpt(live, reqFrom, reqTo, focus){
   return live;
 }
 
-// Corrected OEE (skill §10.2) — machine-filtered daily A/P/Q/OEE with corrected zeroing, batched (2 queries for all BUs)
+// Corrected OEE (skill §10.2) — per-BU (avoids 200-row MCP cap). Builds machine-filtered oeeV2 + all-machines oeeV2All.
 async function injectCorrectedOee(live, reqFrom, reqTo, focus){
   try{
     const nv=v=>+String(v==null?0:v).replace(/,/g,'');
     const dFrom=reqFrom||new Date(Date.now()-9*864e5).toISOString().slice(0,10);
     const dTo=reqTo||new Date().toISOString().slice(0,10);
-    const rows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
-      `SELECT intBusinessUnitId bu, strMachineName m, CONVERT(varchar(10),dteProductionDate,23) d, SUM(ISNULL(numAvailableMinute,0)) Av, SUM(ISNULL(numNptLossTimeInMinutes,0)) Npt, SUM(ISNULL(numShiftDurationMinute,0)) Dur, SUM(ISNULL(numPlannedDowntimeMin,0)) PlnDn, SUM(ISNULL(numSMVCycleTime,0)*ISNULL(numActualOutputQuantity,0)) SmvOut, SUM(ISNULL(numActualOutputQuantity,0)) Out FROM mes.tblOeeProdWasteHeader WHERE ISNULL(isActive,1)=1 AND dteProductionDate >= '${dFrom}' AND dteProductionDate <= '${dTo}' GROUP BY intBusinessUnitId, strMachineName, CONVERT(varchar(10),dteProductionDate,23)`, limit:12000});
-    const wRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
-      `SELECT h.intBusinessUnitId bu, h.strMachineName m, CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) Waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.isActive=1 AND r.isActive=1 AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}' GROUP BY h.intBusinessUnitId, h.strMachineName, CONVERT(varchar(10),h.dteProductionDate,23)`, limit:12000});
-    const wasteKey={}; wRows.forEach(r=>{ wasteKey[nv(r.bu)+'|'+r.m+'|'+r.d]=nv(r.Waste); });
     const g=x=>x<=0?0:x;
-    const byBu={}; rows.forEach(r=>{ const b=nv(r.bu); (byBu[b]=byBu[b]||{})[r.m]=byBu[b][r.m]||{}; const row=byBu[b][r.m][r.d]=byBu[b][r.m][r.d]||{Av:0,Npt:0,Dur:0,PlnDn:0,SmvOut:0,Out:0}; row.Av+=nv(r.Av); row.Npt+=nv(r.Npt); row.Dur+=nv(r.Dur); row.PlnDn+=nv(r.PlnDn); row.SmvOut+=nv(r.SmvOut); row.Out+=nv(r.Out); });
     for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(focus && P.key!==focus) continue;
       const mf={accl:['VRM-1','VRM-2'], apfil:['Loom'], ail:['Roughing Mill']}[P.key]||null;
-      const isF = m=> mf ? mf.some(x=>m.toLowerCase().indexOf(x.toLowerCase())>=0) : true;
-      const bu=byBu[P.bu]||{}; const dates=new Set();
-      Object.values(bu).forEach(m=>Object.keys(m).forEach(d=>dates.add(d)));
-      // Build both filtered (oeeV2) and all-machines (oeeV2All) daily per-date series.
-      const build=(filterFn)=>[...dates].sort().map(d=>{
-        let Av=0,Npt=0,Dur=0,PlnDn=0,SmvOut=0,Out=0,Waste=0,used=false;
-        Object.entries(bu).forEach(([m,dd])=>{ if(dd[d]&&filterFn(m)){ const r=dd[d]; Av+=r.Av;Npt+=r.Npt;Dur+=r.Dur;PlnDn+=r.PlnDn;SmvOut+=r.SmvOut;Out+=r.Out;Waste+=wasteKey[P.bu+'|'+m+'|'+d]||0; used=true; } });
-        if(!used){ Object.entries(bu).forEach(([m,dd])=>{ if(dd[d]){ const r=dd[d]; Av+=r.Av;Npt+=r.Npt;Dur+=r.Dur;PlnDn+=r.PlnDn;SmvOut+=r.SmvOut;Out+=r.Out;Waste+=wasteKey[P.bu+'|'+m+'|'+d]||0; } }); }
-        const A=g(Dur-PlnDn)===0?0:Math.min(g(Av-Npt)/g(Dur-PlnDn),1);
-        const Pf=g(Av)===0?0:Math.min(SmvOut/g(Av),1);
-        const Q=g(Out)===0?0:Math.min(g(Out-Waste)/g(Out),1);
-        return {d,A:+(A*100).toFixed(2),P:+(Pf*100).toFixed(2),Q:+(Q*100).toFixed(2),OEE:+(A*Pf*Q*100).toFixed(2)};
-      });
-      t.oeeV2=build(isF);
-      // All-machines variant (relevant for ACCL; identical to filtered for plants with no machine filter)
-      t.oeeV2All=build(m=>true);
+      const mcond = mf ? ` AND (${mf.map(m=>`strMachineName LIKE '${m}%'`).join(' OR ')})` : '';
+      try{
+        // machine-filtered rows (oeeV2) grouped by date (per-BU => small result)
+        const fRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+          `SELECT CONVERT(varchar(10),dteProductionDate,23) d, SUM(ISNULL(numAvailableMinute,0)) Av, SUM(ISNULL(numNptLossTimeInMinutes,0)) Npt, SUM(ISNULL(numShiftDurationMinute,0)) Dur, SUM(ISNULL(numPlannedDowntimeMin,0)) PlnDn, SUM(ISNULL(numSMVCycleTime,0)*ISNULL(numActualOutputQuantity,0)) SmvOut, SUM(ISNULL(numActualOutputQuantity,0)) Out FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 ${mcond} AND dteProductionDate >= '${dFrom}' AND dteProductionDate <= '${dTo}' GROUP BY CONVERT(varchar(10),dteProductionDate,23)`, limit:200});
+        const fW=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+          `SELECT CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) Waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 ${mcond} AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}' GROUP BY CONVERT(varchar(10),h.dteProductionDate,23)`, limit:200});
+        const fWaste={}; fW.forEach(r=>{ fWaste[r.d]=nv(r.Waste); });
+        const build=(rows,wasteBy)=>rows.map(r=>{ const Av=nv(r.Av),Npt=nv(r.Npt),Dur=nv(r.Dur),PlnDn=nv(r.PlnDn),SmvOut=nv(r.SmvOut),Out=nv(r.Out),Waste=wasteBy[r.d]||0;
+          const A=g(Dur-PlnDn)===0?0:Math.min(g(Av-Npt)/g(Dur-PlnDn),1);
+          const Pf=g(Av)===0?0:Math.min(SmvOut/g(Av),1);
+          const Q=g(Out)===0?0:Math.min(g(Out-Waste)/g(Out),1);
+          return {d:r.d,A:+(A*100).toFixed(2),P:+(Pf*100).toFixed(2),Q:+(Q*100).toFixed(2),OEE:+(A*Pf*Q*100).toFixed(2)}; });
+        t.oeeV2=build(fRows, fWaste);
+        // all-machines rows (oeeV2All) — no machine filter
+        const aRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+          `SELECT CONVERT(varchar(10),dteProductionDate,23) d, SUM(ISNULL(numAvailableMinute,0)) Av, SUM(ISNULL(numNptLossTimeInMinutes,0)) Npt, SUM(ISNULL(numShiftDurationMinute,0)) Dur, SUM(ISNULL(numPlannedDowntimeMin,0)) PlnDn, SUM(ISNULL(numSMVCycleTime,0)*ISNULL(numActualOutputQuantity,0)) SmvOut, SUM(ISNULL(numActualOutputQuantity,0)) Out FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND dteProductionDate >= '${dFrom}' AND dteProductionDate <= '${dTo}' GROUP BY CONVERT(varchar(10),dteProductionDate,23)`, limit:200});
+        const aW=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+          `SELECT CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) Waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}' GROUP BY CONVERT(varchar(10),h.dteProductionDate,23)`, limit:200});
+        const aWaste={}; aW.forEach(r=>{ aWaste[r.d]=nv(r.Waste); });
+        t.oeeV2All=build(aRows, aWaste);
+      }catch(e){ console.error('  oeeV2 '+P.key+' failed', e.message); t.oeeV2=[]; t.oeeV2All=[]; }
     }
   }catch(e){ console.error('oeeV2 failed', e.message); }
   return live;
