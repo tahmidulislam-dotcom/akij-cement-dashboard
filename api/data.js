@@ -89,15 +89,20 @@ async function injectProductTargets(live, focus) {
   try {
     const normU = n => String(n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
     for (const P of PLANTS) {
-      const t = live.plants?.[P.key]; if (!t) continue;
+      const t = live.plants?.[P.key]; if (!t) continue; if (focus && P.key!==focus) continue;
       const mf = MACHINE_FILTER[P.key] ? ` AND ${MACHINE_FILTER[P.key]}` : '';
-      const rows = await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
-        `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numActualOutputQuantity,0)) actual, SUM(ISNULL(numShiftTargetQuantity,0)) target FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} ${mf} GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000});
-      if(!rows.length) continue;
+      const base = `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numActualOutputQuantity,0)) actual, SUM(ISNULL(numShiftTargetQuantity,0)) target FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu}`;
+      const rows = await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery: base + `${mf} GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000});
+      // All-machines variant (machine-filtered only for the 3 special SBUs; useful for ACCL 'all machines' section)
+      const rowsAll = mf ? await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery: base + ` GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000}) : rows;
       t.machDaily = t.machDaily || [];
       const mk = new Map(t.machDaily.map(x=>[x.d+'|'+x.u, x]));
       rows.forEach(r=>{ mk.set(r.d+'|'+normU(r.u), {d:r.d, u:normU(r.u), actual:num(r.actual), target:num(r.target)}); });
       t.machDaily = [...mk.values()].sort((a,b)=>a.d<b.d?-1:1);
+      t.machDailyAll = t.machDailyAll || [];
+      const ma = new Map(t.machDailyAll.map(x=>[x.d+'|'+x.u, x]));
+      rowsAll.forEach(r=>{ ma.set(r.d+'|'+normU(r.u), {d:r.d, u:normU(r.u), actual:num(r.actual), target:num(r.target)}); });
+      t.machDailyAll = [...ma.values()].sort((a,b)=>a.d<b.d?-1:1);
     }
   } catch(e) { /* skip */ }
   return live;
@@ -254,8 +259,10 @@ async function injectNpt(live, reqFrom, reqTo, focus){
         const combAvail=(mf&&fAvail>0)?fAvail:aggAvail;
         if(combAvail>0){ combined=+(combLoss/combAvail*100).toFixed(1); if(combLoss>combAvail) cStatus='loss>avail'; }
         else if(wcSet.size) cStatus='nA';
+        const allNpt = aggAvail>0?+(aggLoss/aggAvail*100).toFixed(1):null;
         t.nptInfo={bu:buKey, company:(t.meta&&t.meta.name)||P.key, formula:'NPT% = Loss Time / (Shift Time - Planned Time)', from:dFrom, to:dTo,
-          combined:{loss:mf?fLoss:aggLoss, shift:mf?fShift:aggShift, planned:mf?fPlanned:aggPlanned, avail:combAvail, npt:combined, status:cStatus, hasData:wcSet.size>0, filtered:!!mf}, machines,
+          combined:{loss:mf?fLoss:aggLoss, shift:mf?fShift:aggShift, planned:mf?fPlanned:aggPlanned, avail:combAvail, npt:combined, status:cStatus, hasData:wcSet.size>0, filtered:!!mf},
+          combinedAll:{loss:aggLoss, shift:aggShift, planned:aggPlanned, avail:aggAvail, npt:allNpt, status:aggAvail>0?'ok':'nA', hasData:wcSet.size>0, filtered:false}, machines,
           src:{loss:'SUM(mes.tblNPTRow.intLossTimeInMinutes) - mes.tblNPTHeader JOIN mes.tblNPTRow (header+row isActive=1)', shift:'SUM(mes.tblOeeProdWasteHeader.numShiftDurationMinute)', planned:'SUM(mes.tblOeeProdWasteHeader.numPlannedDowntimeMin)', avail:'= numAvailableMinute (or Shift Time - Planned Time)'}};
       }catch(e){ console.error('  npt '+P.key+' failed', e.message); }
     }
@@ -276,21 +283,24 @@ async function injectCorrectedOee(live, reqFrom, reqTo, focus){
     const wasteKey={}; wRows.forEach(r=>{ wasteKey[nv(r.bu)+'|'+r.m+'|'+r.d]=nv(r.Waste); });
     const g=x=>x<=0?0:x;
     const byBu={}; rows.forEach(r=>{ const b=nv(r.bu); (byBu[b]=byBu[b]||{})[r.m]=byBu[b][r.m]||{}; const row=byBu[b][r.m][r.d]=byBu[b][r.m][r.d]||{Av:0,Npt:0,Dur:0,PlnDn:0,SmvOut:0,Out:0}; row.Av+=nv(r.Av); row.Npt+=nv(r.Npt); row.Dur+=nv(r.Dur); row.PlnDn+=nv(r.PlnDn); row.SmvOut+=nv(r.SmvOut); row.Out+=nv(r.Out); });
-    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(focus && P.key!==focus) continue; if(focus && P.key!==focus) continue;
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(focus && P.key!==focus) continue;
       const mf={accl:['VRM-1','VRM-2'], apfil:['Loom'], ail:['Roughing Mill']}[P.key]||null;
       const isF = m=> mf ? mf.some(x=>m.toLowerCase().indexOf(x.toLowerCase())>=0) : true;
       const bu=byBu[P.bu]||{}; const dates=new Set();
       Object.values(bu).forEach(m=>Object.keys(m).forEach(d=>dates.add(d)));
-      t.oeeV2=[...dates].sort().map(d=>{
+      // Build both filtered (oeeV2) and all-machines (oeeV2All) daily per-date series.
+      const build=(filterFn)=>[...dates].sort().map(d=>{
         let Av=0,Npt=0,Dur=0,PlnDn=0,SmvOut=0,Out=0,Waste=0,used=false;
-        Object.entries(bu).forEach(([m,dd])=>{ if(dd[d]&&isF(m)){ const r=dd[d]; Av+=r.Av;Npt+=r.Npt;Dur+=r.Dur;PlnDn+=r.PlnDn;SmvOut+=r.SmvOut;Out+=r.Out;Waste+=wasteKey[P.bu+'|'+m+'|'+d]||0; used=true; } });
-        // if no machine matched the filter, fall back to all machines (used=false)
+        Object.entries(bu).forEach(([m,dd])=>{ if(dd[d]&&filterFn(m)){ const r=dd[d]; Av+=r.Av;Npt+=r.Npt;Dur+=r.Dur;PlnDn+=r.PlnDn;SmvOut+=r.SmvOut;Out+=r.Out;Waste+=wasteKey[P.bu+'|'+m+'|'+d]||0; used=true; } });
         if(!used){ Object.entries(bu).forEach(([m,dd])=>{ if(dd[d]){ const r=dd[d]; Av+=r.Av;Npt+=r.Npt;Dur+=r.Dur;PlnDn+=r.PlnDn;SmvOut+=r.SmvOut;Out+=r.Out;Waste+=wasteKey[P.bu+'|'+m+'|'+d]||0; } }); }
         const A=g(Dur-PlnDn)===0?0:Math.min(g(Av-Npt)/g(Dur-PlnDn),1);
         const Pf=g(Av)===0?0:Math.min(SmvOut/g(Av),1);
         const Q=g(Out)===0?0:Math.min(g(Out-Waste)/g(Out),1);
         return {d,A:+(A*100).toFixed(2),P:+(Pf*100).toFixed(2),Q:+(Q*100).toFixed(2),OEE:+(A*Pf*Q*100).toFixed(2)};
       });
+      t.oeeV2=build(isF);
+      // All-machines variant (relevant for ACCL; identical to filtered for plants with no machine filter)
+      t.oeeV2All=build(m=>true);
     }
   }catch(e){ console.error('oeeV2 failed', e.message); }
   return live;

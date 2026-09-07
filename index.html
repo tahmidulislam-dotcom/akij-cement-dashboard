@@ -134,6 +134,13 @@ tr:last-child td{border-bottom:none}
     <div id="nptPctTrace" style="margin-top:10px;font-size:12px;line-height:1.7;color:#cdd7ea"></div>
   </div>
 
+  <!-- ACCL scope split: VRM-only vs All machines (OEE + output + NPT) -->
+  <div class="panel c12" id="scopePanel" style="display:none">
+    <h3>🏭 Machine Scope Split — <span id="scopeTitle">—</span></h3>
+    <div class="note">Same KPIs for the machine-filtered set (VRM) vs all machines — for <b>Akij Cement Ltd</b>.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin:12px 0" id="scopeGrid"></div>
+  </div>
+
   <!-- Machine OEE (plant-specific: VRM / Rolling / Loom) -->
   <div class="panel" id="vrmPanel" style="display:none">
     <h3>⚙️ Machine OEE Detail</h3>
@@ -543,6 +550,50 @@ async function loadMachineOee(){
   }catch(e){ panel.style.display='none'; }
 }
 /* ---------- NPT% (correct formula) render + traceability ---------- */
+/* ---------- ACCL scope split: VRM-only vs All machines ---------- */
+function oeeAvg(arr){
+  const r=(arr||[]).filter(x=>inRange(x.d));
+  if(!r.length) return null;
+  const A=r.reduce((s,x)=>s+x.A,0)/r.length, P=r.reduce((s,x)=>s+x.P,0)/r.length, Q=r.reduce((s,x)=>s+(x.Q||0),0)/r.length, O=r.reduce((s,x)=>s+x.OEE,0)/r.length;
+  return {A,P,Q,OEE:O,n:r.length};
+}
+function renderScope(){
+  const panel=$('scopePanel'); if(!panel) return;
+  if(PLANT!=='accl'){ panel.style.display='none'; return; }
+  const hasOeeAll=(P.oeeV2All&&P.oeeV2All.length), hasScope=!!(P.oeeV2&&P.oeeV2All);
+  if(!hasScope){ panel.style.display='none'; return; }
+  panel.style.display='';
+  $('scopeTitle').textContent=(P.meta.name||PLANT)+' · '+(FROM&&TO&&FROM!==TO?(`${FROM} → ${TO}`):(FROM||'—'));
+  const col=(label, oee, dailyRows, machRows, nptComb)=>{
+    const stats=uomStats((machRows||[]).map(x=>({u:x.u,a:x.actual!=null?x.actual:x.a,g:(x.a!=null?x.a:(x.g||0)),cs:(x.cs||0)})));
+    const actual=stats.length?stats.map(x=>`${fmt(x.a,0)} ${outLabel(x.u)}`).join(' · '):'—';
+    const tgtBy={}; (machRows||[]).forEach(x=>{ tgtBy[x.u]=(tgtBy[x.u]||0)+((x.target!=null?x.target:x.t)||0); });
+    const tgt=Object.keys(tgtBy).length?Object.keys(tgtBy).map(u=>`${fmt(tgtBy[u],0)} ${outLabel(u)}`).join(' · '):'—';
+    const cu=stats.length?stats.map(x=>`${x.u} ${x.cu!=null?(x.cu*100).toFixed(0)+'%':'—'}`).join(' · '):'—';
+    const n=nptComb||{};
+    const o=oee||{};
+    return `<div style="border:1px solid #233048;border-radius:12px;background:#0b1220;padding:14px 16px">
+      <div style="font-weight:700;color:var(--accent);font-size:14px;margin-bottom:10px">${label}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+        ${[
+          {l:'OEE', v:o.OEE!=null?o.OEE.toFixed(1)+'%':'—', ac:'var(--teal)'},
+          {l:'Availability', v:o.A!=null?o.A.toFixed(1)+'%':'—', ac:'var(--blue)'},
+          {l:'Performance', v:o.P!=null?o.P.toFixed(1)+'%':'—', ac:'var(--amber)'},
+          {l:'Quality', v:o.Q!=null?o.Q.toFixed(1)+'%':'—', ac:'var(--green)'},
+          {l:'NPT%', v:n.npt!=null?n.npt.toFixed(1)+'%':'—', ac:'var(--red)'},
+          {l:'Actual Output', v:actual, ac:'var(--pink)'},
+          {l:'Target Output', v:tgt, ac:'var(--pink)'},
+          {l:'Capacity Util', v:cu, ac:'var(--purple)'},
+        ].map(k=>`<div class="kpi" style="--ac:${k.ac};padding:9px 11px"><div class="lbl">${k.l}</div><div class="val" style="font-size:18px">${k.v}</div></div>`).join('')}
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--mut)">${o.n?`avg of ${o.n} day(s)`:''} · Loss ${fmt(n.loss||0,0)} min ÷ Available ${fmt(n.avail||0,0)} min · Shift ${fmt(n.shift||0,0)} − Planned ${fmt(n.planned||0,0)}</div>
+    </div>`;
+  };
+  const oeeV=$('scopeGrid');
+  oeeV.innerHTML=col('VRM-1 + VRM-2 (filtered)', oeeAvg(P.oeeV2), null, P.machDaily, P.nptInfo&&P.nptInfo.combined)
+             + col('All machines', oeeAvg(P.oeeV2All), null, P.machDailyAll, P.nptInfo&&P.nptInfo.combinedAll);
+}
+
 function renderNptPct(){
   const panel=$('nptPctPanel'); if(!panel) return;
   const info=(P&&P.nptInfo);
@@ -987,6 +1038,7 @@ function render(){
   <br><b>Data sources —</b> mes.tblNPTHeader + mes.tblNPTRow (loss time) · mes.tblOeeProdWasteHeader (shift / planned / available time) · mes.tblProductionPlanVarianceIssue (planning) · Plant: <b>${P.meta.name}</b>, extracted ${DATA.generated}.
   MOH is recorded at company (business-unit) level — for multi-plant companies (ARMCL, Akij Essentials) these figures span all their plants.`;
   renderNptPct();
+  renderScope();
 }
 
 document.addEventListener('DOMContentLoaded', init);

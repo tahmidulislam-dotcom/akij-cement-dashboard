@@ -611,8 +611,10 @@ const server = http.createServer(async (req, res) => {
                 const combAvail = (mf&&fAvail>0) ? fAvail : aggAvail;
                 if(combAvail>0){ combined=+(combLoss/combAvail*100).toFixed(1); if(combLoss>combAvail) cStatus='loss>avail'; }
                 else if(wcSet.size) cStatus='nA';
+                const allNpt = aggAvail>0?+(aggLoss/aggAvail*100).toFixed(1):null;
                 tgt.nptInfo={bu:buKey, company:(tgt.meta&&tgt.meta.name)||P.key, formula:'NPT% = Loss Time / (Shift Time − Planned Time)', from:dFrom, to:dTo,
-                  combined:{loss:mf?fLoss:aggLoss, shift:mf?fShift:aggShift, planned:mf?fPlanned:aggPlanned, avail:combAvail, npt:combined, status:cStatus, hasData:wcSet.size>0, filtered:!!mf}, machines,
+                  combined:{loss:mf?fLoss:aggLoss, shift:mf?fShift:aggShift, planned:mf?fPlanned:aggPlanned, avail:combAvail, npt:combined, status:cStatus, hasData:wcSet.size>0, filtered:!!mf},
+                  combinedAll:{loss:aggLoss, shift:aggShift, planned:aggPlanned, avail:aggAvail, npt:allNpt, status:aggAvail>0?'ok':'nA', hasData:wcSet.size>0, filtered:false}, machines,
                   src:{loss:'SUM(mes.tblNPTRow.intLossTimeInMinutes) — mes.tblNPTHeader JOIN mes.tblNPTRow (header+row isActive=1)', shift:'SUM(mes.tblOeeProdWasteHeader.numShiftDurationMinute)', planned:'SUM(mes.tblOeeProdWasteHeader.numPlannedDowntimeMin)', avail:'= numAvailableMinute (or Shift Time − Planned Time)'}};
               }catch(e){ console.error('  nptInfo '+P.key+' failed', e.message); tgt.nptInfo={bu:buKey, company:(tgt.meta&&tgt.meta.name)||P.key, formula:'NPT% = Loss Time / (Shift Time − Planned Time)', from:dFrom||reqFrom, to:dTo||reqTo, combined:{loss:0,shift:0,planned:0,avail:0,npt:null,status:'noData',hasData:false,filtered:false}, machines:[], error:e.message}; }
             }
@@ -648,6 +650,23 @@ const server = http.createServer(async (req, res) => {
                   return {d:r.d, A:+(A*100).toFixed(2), P:+(P*100).toFixed(2), Q:+(Q*100).toFixed(2), OEE:+(OEE*100).toFixed(2)};
                 });
               }catch(e){ console.error('  oeeV2 '+P.key+' failed', e.message); tgt.oeeV2=[]; }
+              // All-machines corrected OEE (relevant for ACCL 'all machines' section)
+              try{
+                const rows=await ibosQuery(`SELECT CONVERT(varchar(10),dteProductionDate,23) d,
+                  SUM(ISNULL(numAvailableMinute,0)) Av, SUM(ISNULL(numNptLossTimeInMinutes,0)) Npt,
+                  SUM(ISNULL(numShiftDurationMinute,0)) Dur, SUM(ISNULL(numPlannedDowntimeMin,0)) PlnDn,
+                  SUM(ISNULL(numSMVCycleTime,0)*ISNULL(numActualOutputQuantity,0)) SmvOut, SUM(ISNULL(numActualOutputQuantity,0)) Out
+                  FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10),dteProductionDate,23) ORDER BY d DESC`, 200);
+                const wRows=await ibosQuery(`SELECT CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) Waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 AND h.dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10),h.dteProductionDate,23)`, 200);
+                const wasteBy={}; wRows.forEach(r=>{ wasteBy[r.d]=nv(r.Waste); });
+                tgt.oeeV2All=rows.map(r=>{
+                  const Av=nv(r.Av), Npt=nv(r.Npt), Dur=nv(r.Dur), PlnDn=nv(r.PlnDn), SmvOut=nv(r.SmvOut), Out=nv(r.Out); const Waste=wasteBy[r.d]||0;
+                  const A=g(Dur-PlnDn)===0?0:Math.min(g(Av-Npt)/g(Dur-PlnDn),1);
+                  const P=g(Av)===0?0:Math.min(SmvOut/g(Av),1);
+                  const Q=g(Out)===0?0:Math.min(g(Out-Waste)/g(Out),1);
+                  return {d:r.d, A:+(A*100).toFixed(2), P:+(P*100).toFixed(2), Q:+(Q*100).toFixed(2), OEE:+(A*P*Q*100).toFixed(2)};
+                });
+              }catch(e){ console.error('  oeeV2All '+P.key+' failed', e.message); tgt.oeeV2All=tgt.oeeV2; }
             }
           }catch(e){ console.error('oeeV2 failed', e.message); }
           // Corrected Plan Variance (skill §10.3) — overlap predicate + window-bounded output, per SBU
