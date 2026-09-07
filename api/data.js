@@ -91,7 +91,7 @@ async function injectProductTargets(live, focus) {
     for (const P of PLANTS) {
       const t = live.plants?.[P.key]; if (!t) continue; if (focus && P.key!==focus) continue;
       const mf = MACHINE_FILTER[P.key] ? ` AND ${MACHINE_FILTER[P.key]}` : '';
-      const base = `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numActualOutputQuantity,0)) actual, SUM(ISNULL(numShiftTargetQuantity,0)) target FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu}`;
+      const base = `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numActualOutputQuantity,0)) actual, SUM(ISNULL(numShiftTargetQuantity,0)) target FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1`;
       const rows = await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery: base + `${mf} GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000});
       // All-machines variant (machine-filtered only for the 3 special SBUs; useful for ACCL 'all machines' section)
       const rowsAll = mf ? await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery: base + ` GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000}) : rows;

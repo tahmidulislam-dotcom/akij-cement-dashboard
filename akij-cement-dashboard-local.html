@@ -750,8 +750,13 @@ function render(){
   const srcRows = ((P.machDailyAll&&P.machDailyAll.length) ? P.machDailyAll : (P.machDaily||[])).filter(x=>inRange(x.d));
   const aSrc = srcRows.length ? srcRows : D;
   const aStats = uomStats(aSrc.map(x=>({d:x.d,u:x.u,a:x.actual!=null?x.actual:x.a,g:x.a!=null?x.a:(x.g||0),cs:(x.cs||0)})));
-  const goodPref = tonPref(aStats); // prefer Ton where DB has Ton/MetricTons
-  const goodVal = fmtOutput(goodPref);
+  // ACCL: show BOTH units (Ton = VRM+Bulk loader, Bag = packers) — "two ways" on one card.
+  // Other Ton-SBUS (HRML/FAL/AEL/AAFL) show Ton only; native-unit SBUs show their units.
+  const SHOW_BOTH = new Set(['accl']);
+  const goodPref = SHOW_BOTH.has(PLANT) ? aStats.filter(x=>isTonUom(x.u)||/(bag|pices)/i.test(x.u)) : tonPref(aStats);
+  const goodVal = SHOW_BOTH.has(PLANT)
+    ? (goodPref.length ? goodPref.map(x=>`${fmt(x.a,0)} ${isTonUom(x.u)?'Ton':'Bag'}`).join(' · ') : '—')
+    : fmtOutput(goodPref);
   const tgtLine = (v,suffix)=> (v==null?'':`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${v}${suffix||''}</div>`);
   // Target Output from productionEntryOee (numShiftTargetQuantity) — sum over selected range, raw from db
   const tgtOutRows = ((P.tgtOut||[]).length ? (P.tgtOut||[]).filter(x=>inRange(x.d)).map(x=>({d:x.d, u:x.u, t:x.t})) : (srcRows.length ? srcRows : D.filter(x=>x.t!=null)));
@@ -761,12 +766,13 @@ function render(){
     const byU = {};
     tgtOutRows.forEach(x=>{ byU[x.u]=(byU[x.u]||0)+((x.target!=null?x.target:x.t)||0); });   // raw target from DB, no conversion
     const tKeys = Object.keys(byU).filter(validUom).filter(isTonUom);
-    const keep = tKeys.length ? tKeys : Object.keys(byU).filter(validUom);   // productionEntryOee units, prefer Ton where DB has Ton
+    let keep = tKeys.length ? tKeys : Object.keys(byU).filter(validUom);   // productionEntryOee units, prefer Ton where DB has Ton
+    if(SHOW_BOTH.has(PLANT)) keep = Object.keys(byU).filter(u=>isTonUom(u)||/(bag|pices)/i.test(u)); // ACCL: show Ton + Bag
     let total, perDay=0;
-    if(TON_SBUS.has(PLANT) || keep.every(u=>outLabel(u)==='Ton')){
+    if(TON_SBUS.has(PLANT) && !SHOW_BOTH.has(PLANT) || keep.every(u=>outLabel(u)==='Ton')){
       const tot=keep.reduce((s,u)=>s+byU[u],0); total=`${fmt(tot,0)} Ton`; perDay=tot;
     } else {
-      total=keep.map(u=>`${fmt(byU[u],0)} ${outLabel(u)}`).join(' · ') || '—';
+      total=keep.map(u=>`${fmt(byU[u],0)} ${isTonUom(u)?'Ton':'Bag'}`).join(' · ') || '—';
       keep.forEach(u=>perDay+=byU[u]);
     }
     return `<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target Output ${total} · ${fmt(perDay/days,0)}/day</div>`;
