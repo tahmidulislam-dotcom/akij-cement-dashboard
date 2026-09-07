@@ -219,6 +219,47 @@ async function injectTgtOut(live){
   return live;
 }
 
+// NPT% = Loss Time / (Shift Time - Planned Time), per BU/machine over the requested range (mes schema)
+async function injectNpt(live, reqFrom, reqTo){
+  try{
+    const nv=v=>+String(v==null?0:v).replace(/,/g,'');
+    const dFrom = reqFrom || new Date(Date.now()-9*864e5).toISOString().slice(0,10);
+    const dTo = reqTo || new Date().toISOString().slice(0,10);
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; const buKey=P.bu;
+      try{
+        const mf = {accl:['VRM-1','VRM-2'], apfil:['Loom'], ail:['Roughing Mill']}[P.key] || null;
+        const isFiltered = wc => mf ? mf.some(m=>wc.toLowerCase().indexOf(m.toLowerCase())>=0) : true;
+        const lossRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{ sqlQuery:
+          `SELECT LTRIM(RTRIM(h.strWrokCenterName)) wc, SUM(ISNULL(r.intLossTimeInMinutes,0)) loss FROM mes.tblNPTHeader h WITH (NOLOCK) JOIN mes.tblNPTRow r WITH (NOLOCK) ON r.intNPTId=h.intNPTId WHERE h.intBusinessUnitId=${buKey} AND ISNULL(h.isActive,1)=1 AND ISNULL(r.isActive,1)=1 AND h.dteLossTimeDate >= '${dFrom}' AND h.dteLossTimeDate <= '${dTo}' GROUP BY LTRIM(RTRIM(h.strWrokCenterName))`, limit:200});
+        const capRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{ sqlQuery:
+          `SELECT LTRIM(RTRIM(strMachineName)) wc, SUM(ISNULL(numShiftDurationMinute,0)) shiftMin, SUM(ISNULL(numPlannedDowntimeMin,0)) plannedMin, SUM(ISNULL(numAvailableMinute,0)) availMin FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${buKey} AND ISNULL(isActive,1)=1 AND dteProductionDate >= '${dFrom}' AND dteProductionDate <= '${dTo}' GROUP BY LTRIM(RTRIM(strMachineName))`, limit:200});
+        const lossBy={}; lossRows.forEach(r=>{ lossBy[r.wc]=(lossBy[r.wc]||0)+nv(r.loss); });
+        const capBy={}; capRows.forEach(r=>{ const o=capBy[r.wc]=capBy[r.wc]||{shiftMin:0,plannedMin:0,availMin:0}; o.shiftMin+=nv(r.shiftMin); o.plannedMin+=nv(r.plannedMin); o.availMin+=nv(r.availMin); });
+        const wcSet=new Set([...Object.keys(capBy),...Object.keys(lossBy)]);
+        const machines=[]; let aggLoss=0,aggShift=0,aggPlanned=0,aggAvail=0,fLoss=0,fAvail=0,fShift=0,fPlanned=0;
+        [...wcSet].sort().forEach(wc=>{
+          const loss=lossBy[wc]||0; const c=capBy[wc]||{shiftMin:0,plannedMin:0,availMin:0};
+          const shift=c.shiftMin, planned=c.plannedMin, avail=c.availMin>0?c.availMin:(shift-planned);
+          let status='ok', npt=null, availForCalc=avail;
+          if(avail<=0){ status='nA'; availForCalc=null; }
+          else { npt=+(loss/avail*100).toFixed(1); if(loss>avail) status='loss>avail'; }
+          if(npt!=null){ aggLoss+=loss; aggShift+=shift; aggPlanned+=planned; aggAvail+=availForCalc; if(isFiltered(wc)){ fLoss+=loss; fAvail+=availForCalc; fShift+=shift; fPlanned+=planned; } }
+          machines.push({machine:wc, loss, shift, planned, avail, npt, status, hasLoss:loss>0, filtered:isFiltered(wc)});
+        });
+        let combined=null, cStatus='ok';
+        const combLoss=(mf&&fAvail>0)?fLoss:aggLoss;
+        const combAvail=(mf&&fAvail>0)?fAvail:aggAvail;
+        if(combAvail>0){ combined=+(combLoss/combAvail*100).toFixed(1); if(combLoss>combAvail) cStatus='loss>avail'; }
+        else if(wcSet.size) cStatus='nA';
+        t.nptInfo={bu:buKey, company:(t.meta&&t.meta.name)||P.key, formula:'NPT% = Loss Time / (Shift Time - Planned Time)', from:dFrom, to:dTo,
+          combined:{loss:mf?fLoss:aggLoss, shift:mf?fShift:aggShift, planned:mf?fPlanned:aggPlanned, avail:combAvail, npt:combined, status:cStatus, hasData:wcSet.size>0, filtered:!!mf}, machines,
+          src:{loss:'SUM(mes.tblNPTRow.intLossTimeInMinutes) - mes.tblNPTHeader JOIN mes.tblNPTRow (header+row isActive=1)', shift:'SUM(mes.tblOeeProdWasteHeader.numShiftDurationMinute)', planned:'SUM(mes.tblOeeProdWasteHeader.numPlannedDowntimeMin)', avail:'= numAvailableMinute (or Shift Time - Planned Time)'}};
+      }catch(e){ console.error('  npt '+P.key+' failed', e.message); }
+    }
+  }catch(e){ console.error('npt failed', e.message); }
+  return live;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');
@@ -234,6 +275,7 @@ module.exports = async (req, res) => {
     try { out = await injectPlanVar(out); } catch {}
     try { out = await injectSchedMaint(out); } catch {}
     try { out = await injectTgtOut(out); } catch {}
+    try { out = await injectNpt(out, req.query.from, req.query.to); } catch {}
     if (plant) { const p = out.plants?.[plant]; if (!p) return res.status(404).json({error:`Plant ${plant} not found`, available: out.order}); return res.status(200).json({plant:p, meta:p.meta, generated:out.generated}); }
     return res.status(200).json(out);
   } catch (e) { return res.status(500).json({ error: e.message }); }

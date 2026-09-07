@@ -166,7 +166,8 @@ async function evaluateAll(live, emailConfig, state, sendFn) {
 }
 
 // Test mail: sends a consolidated report (optionally a single SBU) to a recipient
-async function sendTestMail(live, emailConfig, to, sendFn, sbuOrAll) {
+// mode='deputy' builds the combined Deputy-COO report (all SBUs, each with alert + full report) in one mail
+async function sendTestMail(live, emailConfig, to, sendFn, sbuOrAll, mode) {
   const today = new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
   const keys = (sbuOrAll && live.plants && live.plants[sbuOrAll]) ? [sbuOrAll] : Object.keys(live.plants||{});
   const body = keys.map(key=>{
@@ -177,9 +178,16 @@ async function sendTestMail(live, emailConfig, to, sendFn, sbuOrAll) {
     return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:10px 0"><div style="font-weight:700;color:#0f766e;margin-bottom:4px">${cfg.name||key}</div>${alertBox}${buildReportHTML(plant, key)}</div>`;
   }).join('');
   const isSingle = keys.length===1;
-  const html = wrapEmail(`Daily Performance Report — ${isSingle?(cfgName(live,keys[0],emailConfig)):'All SBUs'} (TEST ${today})`, `<div style="font-size:13px;color:#334155;margin-bottom:6px">Test email — full dashboard report. Generated <b>${today}</b>.</div>${body}`);
-  await sendFn([to], `📊 Akij Dashboard Report (TEST) — ${isSingle?(cfgName(live,keys[0],emailConfig)):'All SBUs'} · ${today}`, html);
-  return { to, sent: true, date: today, sbu: isSingle?keys[0]:'ALL' };
+  const isDeputy = mode==='deputy';
+  const header = isDeputy
+    ? `<div style="font-size:13px;color:#334155;margin-bottom:6px">Combined Deputy COO report — performance across <b>${keys.length}</b> SBU(s) on <b>${today}</b>. Each section is a full dashboard report.</div>`
+    : `<div style="font-size:13px;color:#334155;margin-bottom:6px">Test email — full dashboard report. Generated <b>${today}</b>.</div>`;
+  const subject = isDeputy
+    ? `⚡ DEPUTY COO COMBINED REPORT — ${keys.length} SBU(s) (TEST ${today})`
+    : `📊 Akij Dashboard Report (TEST) — ${isSingle?(cfgName(live,keys[0],emailConfig)):'All SBUs'} · ${today}`;
+  const html = wrapEmail(subject, header + body);
+  await sendFn([to], subject, html);
+  return { to, sent: true, date: today, sbu: isSingle?keys[0]:'ALL', mode: isDeputy?'deputy':'all' };
 }
 function cfgName(live, key, cfg){ return (cfg&&cfg[key]&&cfg[key].name)||key; }
 

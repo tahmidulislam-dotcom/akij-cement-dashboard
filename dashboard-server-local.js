@@ -4,6 +4,16 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+// Tiny .env loader (no dependency) — reads SMTP_APP_PASSWORD etc. from .env (gitignored)
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, 'utf8').split(/\r?\n/).forEach(line => {
+      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/i);
+      if (m) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
+    });
+  }
+} catch (e) {}
 const sql = require('mssql');
 const alertEngine = require('./alert-engine.js');
 
@@ -120,6 +130,48 @@ async function gmailSend(to, subject, html) {
   return d.id;
 }
 
+/* ---------- SMTP sender (App Password @ smtp.gmail.com:465) — used when SMTP_APP_PASSWORD is set ---------- */
+const tls = require('tls');
+function smtpSend(to, subject, html) {
+  const user = process.env.SMTP_EMAIL || process.env.SENDER_EMAIL || 'deputy.coo@akijresource.com';
+  const pass = process.env.SMTP_APP_PASSWORD;
+  return new Promise((resolve, reject) => {
+    const sock = tls.connect(465, 'smtp.gmail.com', { servername: 'smtp.gmail.com' }, () => {
+      let buf = '';
+      const mime = ['To: ' + to.join(','), 'From: ' + user, 'Content-Type: text/html; charset="UTF-8"',
+        'MIME-Version: 1.0', 'Subject: =?UTF-8?B?' + Buffer.from(subject).toString('base64') + '?=', '', html].join('\r\n');
+      const cmds = [
+        'EHLO localhost', 'AUTH LOGIN',
+        Buffer.from(user).toString('base64'), Buffer.from(pass).toString('base64'),
+        'MAIL FROM:<' + user + '>',
+        ...to.map(t => 'RCPT TO:<' + t + '>'),
+        'DATA', mime + '\r\n.',
+      ];
+      let i = 0;
+      const step = () => {
+        if (i >= cmds.length) { sock.end(); resolve('sent'); return; }
+        sock.write(cmds[i] + '\r\n'); i++;
+      };
+      sock.on('data', d => {
+        buf += d.toString();
+        if (/^[0-9]{3} /.test(buf.split('\r\n').filter(Boolean).slice(-1)[0] || '')) {
+          const line = buf.split('\r\n').filter(Boolean).slice(-1)[0];
+          const code = parseInt(line.slice(0,3), 10);
+          if (code >= 400) { sock.destroy(); reject(new Error('SMTP ' + line)); return; }
+          if (code === 354) { sock.write(mime + '\r\n.\r\n'); }
+          step();
+        }
+      });
+    });
+    sock.on('error', err => reject(new Error('SMTP conn: ' + err.message)));
+    sock.setTimeout(30000, () => { sock.destroy(); reject(new Error('SMTP timeout')); });
+  });
+}
+async function sendEmail(to, subject, html) {
+  if (process.env.SMTP_APP_PASSWORD) return smtpSend(to, subject, html);
+  return gmailSend(to, subject, html);
+}
+
 /* ---------- DeepSeek analysis ---------- */
 const SYSTEM_PROMPT = `You are a senior manufacturing performance analyst for Akij Cement Company Ltd. (ACCL Narayanganj plant, Bangladesh — 2 VRM mills, 5 packers, 1 bulk loader).
 You receive a JSON of computed KPIs for a date range plus the previous equal-length period and deltas.
@@ -203,7 +255,7 @@ const server = http.createServer(async (req, res) => {
         if (r.ok) { const j = await r.json(); if (j && j.plants) live = j; }
         const cfg = cfg0;
         const state = loadAlertState();
-        const reslt = await alertEngine.evaluateAll(live, cfg, state, async (to, subject, htmlBody) => { return await gmailSend(to, subject, htmlBody); });
+        const reslt = await alertEngine.evaluateAll(live, cfg, state, async (to, subject, htmlBody) => { return await sendEmail(to, subject, htmlBody); });
         saveAlertState(reslt.state);
         return json(res, 200, reslt);
       } catch (e) { return json(res, 500, { error: e.message }); }
@@ -223,7 +275,7 @@ const server = http.createServer(async (req, res) => {
         const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
         const live = r.ok ? (await r.json()) : { plants:{} };
         const cfg = loadAlertCfg();
-        const out = await alertEngine.sendTestMail(live, cfg, to, async (t, subject, htmlBody) => { return await gmailSend(t, subject, htmlBody); }, key);
+        const out = await alertEngine.sendTestMail(live, cfg, to, async (t, subject, htmlBody) => { return await sendEmail(t, subject, htmlBody); }, key, b && b.deputy ? 'deputy' : null);
         return json(res, 200, out);
       } catch (e) { return json(res, 500, { error: e.message }); }
     }
@@ -247,7 +299,7 @@ const server = http.createServer(async (req, res) => {
       if (to.length === 0) return json(res, 400, { error: 'No valid recipients — add at least one email and click Save Addresses' });
       if (to.length > 5) return json(res, 400, { error: 'Maximum 5 recipients allowed' });
       if (!b.subject || !b.html) return json(res, 400, { error: 'subject and html required' });
-      const id = await gmailSend(to, b.subject, sanitize(b.html));
+      const id = await sendEmail(to, b.subject, sanitize(b.html));
       return json(res, 200, { ok: true, message_id: id, sent_to: to });
     }
     if (url.pathname === '/api/moh-budget' && req.method === 'GET') {
@@ -291,6 +343,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/data' && req.method === 'GET') {
       const mergeLive = url.searchParams.get('live')!=='0';
+      const reqDate = url.searchParams.get('date');   // single-date filter (deprecated; use from/to)
+      const reqFrom = url.searchParams.get('from');   // NPT date range (global filter for all SBUs)
+      const reqTo = url.searchParams.get('to');
       let live;
       try{
         const html=fs.readFileSync(DASH,'utf8');
@@ -520,6 +575,48 @@ const server = http.createServer(async (req, res) => {
               tgt.schedMaint={month:monthKey, monthly:st.monthly, dueMTD:st.dueMTD, doneMTD:st.doneMTD, daily};
             }
           }catch(e){ console.error('schedMaint failed', e.message); }
+          // NPT% = Loss Time / (Shift Time − Planned Time), per BU/machine/day (iBOSDD via MCP) — correct formula
+          try{
+            const nv=v=>+String(v==null?0:v).replace(/,/g,'');
+            for(const P of PLANTS_LIVE){
+              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              const buKey=P.bu;
+              try{
+                const dFrom = reqFrom || reqDate || new Date(Date.now()-9*864e5).toISOString().slice(0,10);
+                const dTo = reqTo || reqDate || new Date().toISOString().slice(0,10);
+                const dPredL = `h.dteLossTimeDate >= '${dFrom}' AND h.dteLossTimeDate <= '${dTo}'`;
+                const dPredC = `dteProductionDate >= '${dFrom}' AND dteProductionDate <= '${dTo}'`;
+                // Machine filter for the NPT combined figure (matches dashboard OEE machine filter)
+                const mf = {accl:['VRM-1','VRM-2'], apfil:['Loom'], ail:['Roughing Mill']}[P.key] || null;
+                const isFiltered = wc => mf ? mf.some(m=>wc.toLowerCase().indexOf(m.toLowerCase())>=0) : true;
+                // Loss Time = SUM(intLossTimeInMinutes) from active NPT headers+rows (unplanned), per BU/machine over range
+                const lossRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strWrokCenterName)) wc, SUM(ISNULL(r.intLossTimeInMinutes,0)) loss FROM mes.tblNPTHeader h WITH (NOLOCK) JOIN mes.tblNPTRow r WITH (NOLOCK) ON r.intNPTId=h.intNPTId WHERE h.intBusinessUnitId=${buKey} AND ISNULL(h.isActive,1)=1 AND ISNULL(r.isActive,1)=1 AND ${dPredL} GROUP BY LTRIM(RTRIM(h.strWrokCenterName))`, 200);
+                // Shift/Planned/Available per BU/machine over range from OEE
+                const capRows=await ibosQuery(`SELECT LTRIM(RTRIM(strMachineName)) wc, SUM(ISNULL(numShiftDurationMinute,0)) shiftMin, SUM(ISNULL(numPlannedDowntimeMin,0)) plannedMin, SUM(ISNULL(numAvailableMinute,0)) availMin FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${buKey} AND ISNULL(isActive,1)=1 AND ${dPredC} GROUP BY LTRIM(RTRIM(strMachineName))`, 200);
+                const lossBy={}; lossRows.forEach(r=>{ lossBy[r.wc]=(lossBy[r.wc]||0)+nv(r.loss); });
+                const capBy={}; capRows.forEach(r=>{ const o=capBy[r.wc]=capBy[r.wc]||{shiftMin:0,plannedMin:0,availMin:0}; o.shiftMin+=nv(r.shiftMin); o.plannedMin+=nv(r.plannedMin); o.availMin+=nv(r.availMin); });
+                const wcSet=new Set([...Object.keys(capBy),...Object.keys(lossBy)]);
+                const machines=[]; let aggLoss=0, aggShift=0, aggPlanned=0, aggAvail=0, fLoss=0, fAvail=0, fShift=0, fPlanned=0;
+                [...wcSet].sort().forEach(wc=>{
+                  const loss=lossBy[wc]||0; const c=capBy[wc]||{shiftMin:0,plannedMin:0,availMin:0};
+                  const shift=c.shiftMin, planned=c.plannedMin, avail=c.availMin>0?c.availMin:(shift-planned);
+                  let status='ok', npt=null, availForCalc=avail;
+                  if(avail<=0){ status='nA'; availForCalc=null; }
+                  else { npt=+(loss/avail*100).toFixed(1); if(loss>avail) status='loss>avail'; }
+                  if(npt!=null){ aggLoss+=loss; aggShift+=shift; aggPlanned+=planned; aggAvail+=availForCalc; if(isFiltered(wc)){ fLoss+=loss; fAvail+=availForCalc; fShift+=shift; fPlanned+=planned; } }
+                  machines.push({machine:wc, loss, shift, planned, avail, npt, status, hasLoss:loss>0, filtered:isFiltered(wc)});
+                });
+                let combined=null, cStatus='ok';
+                const combLoss = (mf&&fAvail>0) ? fLoss : aggLoss;
+                const combAvail = (mf&&fAvail>0) ? fAvail : aggAvail;
+                if(combAvail>0){ combined=+(combLoss/combAvail*100).toFixed(1); if(combLoss>combAvail) cStatus='loss>avail'; }
+                else if(wcSet.size) cStatus='nA';
+                tgt.nptInfo={bu:buKey, company:(tgt.meta&&tgt.meta.name)||P.key, formula:'NPT% = Loss Time / (Shift Time − Planned Time)', from:dFrom, to:dTo,
+                  combined:{loss:mf?fLoss:aggLoss, shift:mf?fShift:aggShift, planned:mf?fPlanned:aggPlanned, avail:combAvail, npt:combined, status:cStatus, hasData:wcSet.size>0, filtered:!!mf}, machines,
+                  src:{loss:'SUM(mes.tblNPTRow.intLossTimeInMinutes) — mes.tblNPTHeader JOIN mes.tblNPTRow (header+row isActive=1)', shift:'SUM(mes.tblOeeProdWasteHeader.numShiftDurationMinute)', planned:'SUM(mes.tblOeeProdWasteHeader.numPlannedDowntimeMin)', avail:'= numAvailableMinute (or Shift Time − Planned Time)'}};
+              }catch(e){ console.error('  nptInfo '+P.key+' failed', e.message); tgt.nptInfo={bu:buKey, company:(tgt.meta&&tgt.meta.name)||P.key, formula:'NPT% = Loss Time / (Shift Time − Planned Time)', from:dFrom||reqFrom, to:dTo||reqTo, combined:{loss:0,shift:0,planned:0,avail:0,npt:null,status:'noData',hasData:false,filtered:false}, machines:[], error:e.message}; }
+            }
+          }catch(e){ console.error('nptInfo failed', e.message); }
         }catch(e){ console.error('data merge failed', e.message); }
       }
       const plant=url.searchParams.get('plant');

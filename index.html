@@ -122,6 +122,18 @@ tr:last-child td{border-bottom:none}
     <div class="ch tall"><canvas id="chNpt"></canvas></div>
   </div>
 
+  <!-- NPT% (correct formula) — per machine + combined, with traceability -->
+  <div class="panel c12" id="nptPctPanel">
+    <h3>NPT% (Non-Productive Time) — <span id="nptPctDate">—</span></h3>
+    <div class="note">NPT% = Loss Time ÷ (Shift Time − Planned Time) · <span id="nptPctNote">—</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:10px 0" id="nptPctKpi"></div>
+    <table id="nptPctTable" style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px">
+      <thead><tr><th style="text-align:left">Machine</th><th>Loss (min)</th><th>Shift (min)</th><th>Planned (min)</th><th>Available (min)</th><th>NPT%</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="nptPctTrace" style="margin-top:10px;font-size:12px;line-height:1.7;color:#cdd7ea"></div>
+  </div>
+
   <!-- Machine OEE (plant-specific: VRM / Rolling / Loom) -->
   <div class="panel" id="vrmPanel" style="display:none">
     <h3>⚙️ Machine OEE Detail</h3>
@@ -259,6 +271,28 @@ tr:last-child td{border-bottom:none}
 </div>
 
 <div class="foot" id="foot"></div>
+
+<!-- Source / Data dictionary (traceability) -->
+<div style="margin-top:16px;border:1px solid #233048;border-radius:10px;background:#0b1220;padding:14px 16px">
+  <details>
+    <summary style="cursor:pointer;font-weight:700;color:var(--accent);font-size:14px">📚 Source / Data dictionary — NPT% &amp; key metrics</summary>
+    <div style="margin-top:10px;font-size:12.5px;color:#cdd7ea;line-height:1.75">
+      <p style="margin:4px 0"><b style="color:var(--teal)">NPT% formula</b>: <code>NPT% = Loss Time ÷ (Shift Time − Planned Time)</code></p>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tr style="background:#0e1626"><th style="text-align:left;padding:5px">Metric</th><th style="text-align:left;padding:5px">Source table &amp; column</th><th style="text-align:left;padding:5px">Notes</th></tr>
+        <tr><td style="padding:5px;border-top:1px solid #233048">Loss Time</td><td style="padding:5px;border-top:1px solid #233048">mes.tblNPTRow.<b>intLossTimeInMinutes</b> (SUM) JOIN mes.tblNPTHeader</td><td style="padding:5px;border-top:1px solid #233048">header &amp; row isActive=1; unplanned categories only</td></tr>
+        <tr><td style="padding:5px;border-top:1px solid #233048">Shift Time</td><td style="padding:5px;border-top:1px solid #233048">mes.tblOeeProdWasteHeader.<b>numShiftDurationMinute</b> (SUM)</td><td style="padding:5px;border-top:1px solid #233048">per BU/machine/day</td></tr>
+        <tr><td style="padding:5px;border-top:1px solid #233048">Planned Time</td><td style="padding:5px;border-top:1px solid #233048">mes.tblOeeProdWasteHeader.<b>numPlannedDowntimeMin</b> (SUM)</td><td style="padding:5px;border-top:1px solid #233048">scheduled/planned downtime</td></tr>
+        <tr><td style="padding:5px;border-top:1px solid #233048">Available Time</td><td style="padding:5px;border-top:1px solid #233048">= Shift − Planned (or <b>numAvailableMinute</b>)</td><td style="padding:5px;border-top:1px solid #233048">denominator of NPT%</td></tr>
+        <tr><td style="padding:5px;border-top:1px solid #233048">Machine / work center</td><td style="padding:5px;border-top:1px solid #233048">mes.tblNPTHeader.<b>strWrokCenterName</b></td><td style="padding:5px;border-top:1px solid #233048">dimension</td></tr>
+        <tr><td style="padding:5px;border-top:1px solid #233048">SBU / business unit</td><td style="padding:5px;border-top:1px solid #233048">dco.tblBusinessUnit (intBusinessUnitId, strBusinessUnitName)</td><td style="padding:5px;border-top:1px solid #233048">dimension</td></tr>
+        <tr><td style="padding:5px;border-top:1px solid #233048">Plant</td><td style="padding:5px;border-top:1px solid #233048">wms.tblPlant (intPlantId, strPlantName)</td><td style="padding:5px;border-top:1px solid #233048">dimension</td></tr>
+        <tr><td style="padding:5px;border-top:1px solid #233048">Planning Achievement</td><td style="padding:5px;border-top:1px solid #233048">mes.tblProductionPlanVarianceIssue (plannedQty, outputQty, difference)</td><td style="padding:5px;border-top:1px solid #233048">avg progress + planned target</td></tr>
+        <tr><td style="padding:5px;border-top:1px solid #233048">Target Output</td><td style="padding:5px;border-top:1px solid #233048">mes.tblOeeProdWasteHeader.<b>numShiftTargetQuantity</b> (SUM)</td><td style="padding:5px;border-top:1px solid #233048">displayed in pink</td></tr>
+      </table>
+    </div>
+  </details>
+</div>
 </div>
 
 <script>
@@ -303,7 +337,7 @@ async function fetchLiveData(){
   const liveEl=document.querySelector('.live');
   if(typeof fetch==='undefined') return false;
   try{
-    const r=await fetch(`${API}/api/data?live=1`,{cache:'no-store'});
+    const r=await fetch(`${API}/api/data?live=1&from=${encodeURIComponent(FROM||(window.P&&P.meta&&P.meta.maxDate)||'')}&to=${encodeURIComponent(TO||(window.P&&P.meta&&P.meta.maxDate)||'')}`,{cache:'no-store'});
     if(!r.ok) throw new Error(''+r.status);
     const live=await r.json();
     if(live && live.plants && live.order && live.generated){
@@ -327,7 +361,7 @@ async function refreshLive(){
   if(st) st.textContent='';
   try{
     // Re-fetch full data which now merges ALL missing dates (08-30, 08-31, 09-01 ...)
-    const r=await fetch(`${API}/api/data?live=1`,{cache:'no-store'});
+    const r=await fetch(`${API}/api/data?live=1&from=${encodeURIComponent(FROM||(P&&P.meta&&P.meta.maxDate)||'')}&to=${encodeURIComponent(TO||(P&&P.meta&&P.meta.maxDate)||'')}`,{cache:'no-store'});
     if(!r.ok) throw new Error(''+r.status);
     const live=await r.json();
     const hasPlants = live && live.plants && live.order;
@@ -508,6 +542,43 @@ async function loadMachineOee(){
         scales:{y:{min:0,max:110,ticks:{callback:v=>v+'%'}},x:{ticks:{maxTicksLimit:15}}}}});
   }catch(e){ panel.style.display='none'; }
 }
+/* ---------- NPT% (correct formula) render + traceability ---------- */
+function renderNptPct(){
+  const panel=$('nptPctPanel'); if(!panel) return;
+  const info=(P&&P.nptInfo);
+  if(!info || !info.combined){ panel.style.display='none'; return; }
+  panel.style.display='';
+  const c=info.combined||{};
+  const range=info.from&&info.to&&info.from!==info.to ? (`${info.from} → ${info.to}`) : (info.from||info.to||'—');
+  $('nptPctDate').textContent=(P.meta.name||PLANT)+' · '+range;
+  $('nptPctNote').textContent = c.hasData?('NPT% = Loss ÷ (Shift − Planned) over '+range):('No NPT data for '+range);
+  const pctv=w=>w==null?'—':w.toFixed(1)+'%';
+  const statusLabel=s=>s==='loss>avail'?'Loss > Available (data error)':(s==='nA'?'N.A. (no available time)':(s==='noData'?'No data':(s==='ok'?'OK':'—')));
+  const color=w=>w==null?'var(--mut)':(w>60?'var(--red)':w>40?'var(--amber)':'var(--green)');
+  // KPI cards
+  $('nptPctKpi').innerHTML=[
+    {l:'NPT% (combined)', v:pctv(c.npt), ac:(c.npt!=null?(c.npt>60?'var(--red)':c.npt>40?'var(--amber)':'var(--green)'):'var(--mut)'), s:c.filtered?'Filtered machines':'All machines'},
+    {l:'Loss Time (min)', v:fmt(c.loss,0), ac:'var(--red)', s:'SUM(mes.tblNPTRow.intLossTimeInMinutes)'},
+    {l:'Shift Time (min)', v:fmt(c.shift,0), ac:'var(--blue)', s:'SUM(mes.tblOeeProdWasteHeader.numShiftDurationMinute)'},
+    {l:'Planned Time (min)', v:fmt(c.planned,0), ac:'var(--purple)', s:'SUM(…numPlannedDowntimeMin)'},
+    {l:'Available Time (min)', v:fmt(c.avail,0), ac:'var(--teal)', s:'= Shift − Planned'},
+  ].map(k=>`<div class="kpi" style="--ac:${k.ac};padding:10px 12px"><div class="lbl">${k.l}</div><div class="val" style="font-size:22px">${k.v}</div><div class="sub">${k.s||''}</div></div>`).join('');
+  // per-machine table
+  $('nptPctTable').querySelector('tbody').innerHTML=(info.machines||[]).map(m=>`<tr style="border-top:1px solid #233048">
+    <td>${m.machine}${m.filtered?' <span style="color:var(--accent)">●</span>':''}</td>
+    <td style="text-align:right">${fmt(m.loss,0)}</td><td style="text-align:right">${fmt(m.shift,0)}</td>
+    <td style="text-align:right">${fmt(m.planned,0)}</td><td style="text-align:right">${fmt(m.avail,0)}</td>
+    <td style="text-align:right;color:${color(m.npt)}"><b>${pctv(m.npt)}</b></td><td style="text-align:center;color:${m.npt==null?'var(--mut)':(m.status==='ok'?'var(--green)':'var(--pink)')}">${statusLabel(m.status)}</td>
+  </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--mut)">No machine data</td></tr>';
+  // traceability
+  const src=info.src||{};
+  $('nptPctTrace').innerHTML=`<b style="color:var(--teal)">Traceability</b> — Formula: <code>NPT% = Loss Time ÷ (Shift Time − Planned Time)</code> · range <b>${range}</b><br>
+    <b>Loss</b> = ${src.loss||'SUM(mes.tblNPTRow.intLossTimeInMinutes)'} = <b>${fmt(c.loss,0)} min</b><br>
+    <b>Shift</b> = ${src.shift||'SUM(mes.tblOeeProdWasteHeader.numShiftDurationMinute)'} = <b>${fmt(c.shift,0)} min</b> · <b>Planned</b> = ${src.planned||'SUM(…numPlannedDowntimeMin)'} = <b>${fmt(c.planned,0)} min</b><br>
+    <b>Available</b> = Shift − Planned = <b>${fmt(c.avail,0)} min</b> · <b>NPT%</b> = ${fmt(c.loss,0)} ÷ ${fmt(c.avail,0)} = <b>${pctv(c.npt)}</b> · SBU <b>${info.company}</b><br>
+    <span style="color:var(--mut)">Combined uses ${c.filtered?'the dashboard machine filter (●)':'all machines'}. Status flags: N.A. (available ≤ 0), "Loss > Available" (data error), No data.</span>`;
+}
+
 function applyFilters(){
   const f=$('fromDate').value, t=$('toDate').value;
   if(!f||!t||f>t){ alert('Please pick a valid From/To date range.'); return; }
@@ -704,9 +775,9 @@ function render(){
   const kpis = [
     {l:'Production OEE', v:pct(agg.OEE), s:(agg.A==null?`Runtime capture starts ${P.meta.rtStart}`:`A ${pct(agg.A,0)} · P ${pct(agg.P,0)} · Q ${pct(agg.Q,0)}`)+(function(){const t=oeeTgt((TO||P.meta.maxDate).slice(0,7));return (t!=null)?`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">OEE Target ${t}%</div>`:'';})(), ac:'var(--teal)'},
     {l:'Capacity Utilization', v:pct(agg.CU), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.cu,0)}`).join(' · '), ac:'var(--blue)'},
-    {l:'NPT (Non-Productive Time)', v:pct(nptPct), s:`${fmt(nptMin/60,0)} hrs NPT vs ${fmt(loadingTot/60,0)} hrs loading`, ac:'var(--red)'},
+    {l:'NPT (Non-Productive Time)', v:(function(){ const ni=P.nptInfo; if(ni&&ni.combined){ const c=ni.combined; return (c.npt!=null?c.npt.toFixed(1)+'%':'—'); } return pct(nptPct); })(), s:(function(){ const ni=P.nptInfo; if(ni&&ni.combined){ const c=ni.combined; return `${fmt(c.loss,0)} min loss ÷ ${fmt(c.avail,0)} min available (${fmt(c.shift,0)} − ${fmt(c.planned,0)} planned)`; } return `${fmt(nptMin/60,0)} hrs NPT vs ${fmt(loadingTot/60,0)} hrs loading`; })(), ac:'var(--red)'},
     {l:'Yield', v:pct(agg.Q), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.y,1)}`).join(' · ')+tgtLine(YIELD_TGT!=null?YIELD_TGT+'%':null), ac:'var(--green)'},
-    {l:'Planning Achievement', v:(planAch!=null?pct(planAch):'—'), s:(pvStat.n?`${pvStat.totDiff>=0?'+':''}${fmt(pvStat.totDiff,0)} diff (out − plan) · avg ${pvStat.avgPct!=null?pct(pvStat.avgPct):'—'} of ${pvStat.n} product line(s)`: 'No plan variance data in range')+tgtLine(PLAN_TGT!=null?PLAN_TGT+'%':null), ac:'var(--amber)'},
+    {l:'Planning Achievement', v:(pvStat.avgPct!=null?fmt(pvStat.avgPct,1)+'%':'—'), s:(pvStat.n?`avg of ${pvStat.n} product line(s) · ${pvStat.totDiff>=0?'+':''}${fmt(pvStat.totDiff,0)} (out − plan)`: 'No plan variance data in range')+(pvStat.n?`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${fmt(pvStat.totPlan,0)} planned</div>`:''), ac:'var(--amber)'},
     {l:'Scheduled Maintenance', v:(function(){ const sm=P.schedMaint; return sm?`${fmt(sm.doneMTD,0)} / ${fmt(sm.monthly,0)}`:(fmt(smMin/60,0)+' h'); })(), s:(function(){ const sm=P.schedMaint; if(sm){ const asOf=(P.meta.maxDate||'').slice(0,10); const m=sm.month||'';
       return `${fmt(sm.monthly,0)} monthly target · ${fmt(sm.dueMTD,0)} due (${m}-01 → ${asOf||m})`; } return `${smEvt} planned events`; })(), ac:'var(--blue)'},
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},
@@ -894,11 +965,12 @@ function render(){
 
   /* ---- footer ---- */
   $('foot').innerHTML = `<b>KPI definitions —</b> Availability = Machine Runtime ÷ Loading Time · Performance = Actual Output ÷ (Rated Capacity/hr × Runtime) · Quality/Yield = Good ÷ Actual Output · OEE = A×P×Q ·
-  Capacity Utilization = Actual ÷ (Rated Capacity/hr × Shift Duration) · NPT% = NPT minutes ÷ Loading minutes · Planning Achievement = Actual ÷ Planned good output (prorated for partial months, UoM-matched) ·
+  Capacity Utilization = Actual ÷ (Rated Capacity/hr × Shift Duration) · NPT% = Loss Time ÷ (Shift Time − Planned Time) · Planning Achievement = Average of product-line progress (output ÷ planned) ·
   MOH = manufacturing overhead booked to production orders (BDT).
   ${P.meta.rtStart?`Machine runtime capture in MES for this plant began <b>${P.meta.rtStart}</b> — OEE, Availability &amp; Performance are unavailable ('—') for earlier periods; other KPIs remain valid for the full history.`:''}
-  <br><b>Data sources —</b> mes.tblOeeProdWasteHeaderArc / tblNPTRowArc / tblProductionPlanningRowArc / tblRCAAPArc · mes production orders (MOH) · Plant: <b>${P.meta.name}</b>, extracted ${DATA.generated}.
+  <br><b>Data sources —</b> mes.tblNPTHeader + mes.tblNPTRow (loss time) · mes.tblOeeProdWasteHeader (shift / planned / available time) · mes.tblProductionPlanVarianceIssue (planning) · Plant: <b>${P.meta.name}</b>, extracted ${DATA.generated}.
   MOH is recorded at company (business-unit) level — for multi-plant companies (ARMCL, Akij Essentials) these figures span all their plants.`;
+  renderNptPct();
 }
 
 document.addEventListener('DOMContentLoaded', init);

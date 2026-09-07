@@ -12,3 +12,5 @@ credentials/
 *.local.json
 
 .vercel
+
+~$*.xlsx
