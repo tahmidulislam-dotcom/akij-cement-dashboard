@@ -417,8 +417,18 @@ async function init(){
     else { $('fromDate').value = `${y}-01-01`; $('toDate').value = `${y}-12-31`; applyFilters(); }
   });
   setPlant(DATA.order[0]);
-  // auto-refresh every 5 min (only when tab visible)
-  setInterval(()=>{ if(document.visibilityState==='visible') refreshLive(); }, 5*60*1000);
+  // Auto-refresh twice a day (6:00 AM + 6:00 PM Dhaka), only when tab visible; manual refresh button works anytime.
+  scheduleDailyRefresh();
+}
+// Refresh every day at 06:00 and 18:00 Dhaka time (checks every 30s).
+function scheduleDailyRefresh(){
+  (function check(){
+    const now=new Date();
+    const dhaka=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Dhaka',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(now);
+    const hm=dhaka.slice(0,5); // HH:MM
+    if(['06:00','18:00'].includes(hm)){ if(document.visibilityState==='visible') refreshLive(); }
+    setTimeout(check, 30*1000);
+  })();
 }
 function setPlant(key){
   PLANT=key; P=DATA.plants[key];
