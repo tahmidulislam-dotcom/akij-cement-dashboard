@@ -50,7 +50,7 @@ async function latestLiveDatas() {
 }
 
 // Inject per-SBU MOH for the current month from iBOSDD Finance (Profit Center, Income Statement only)
-async function injectMOH(live) {
+async function injectMOH(live, focus) {
   const to = '2026-08-31', from = '2026-08-01';
   for (const [key, cfg] of Object.entries(MOH_PCTER)) {
     const t = live.plants?.[key]; if (!t) continue;
@@ -85,7 +85,7 @@ async function injectMOH(live) {
 
 // Machine-filtered Actual + Target output (per date + UoM) from mes.tblOeeProdWasteHeader.
 // ACCL -> VRM1+2, APFIL -> Loom, AIL -> Rolling; others -> all machines. Stored per date for range summing.
-async function injectProductTargets(live) {
+async function injectProductTargets(live, focus) {
   try {
     const normU = n => String(n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
     for (const P of PLANTS) {
@@ -103,7 +103,7 @@ async function injectProductTargets(live) {
   return live;
 }
 
-async function mergeLive(live) {
+async function mergeLive(live, focus) {
   const today = new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Dhaka' });
   let latest = null;
   try { latest = await latestLiveDatas(); } catch {}
@@ -170,7 +170,7 @@ async function mergeLive(live) {
 }
 
 // Planning Achievement from Production Plan Variance (per plan-product, dated by dteServerDateTime)
-async function injectPlanVar(live){
+async function injectPlanVar(live, focus){
   try{
     for(const P of PLANTS){
       try{
@@ -184,7 +184,7 @@ async function injectPlanVar(live){
 }
 
 // Preventive / Scheduled Maintenance (PeopleDesk ast): monthly target, MTD done, due-in-period
-async function injectSchedMaint(live){
+async function injectSchedMaint(live, focus){
   try{
     const monthStart=((new Date().toISOString().slice(0,7))+'-01');
     const monthEnd=(((y,m)=>{const d=new Date(Date.UTC(y,m,0));return y+'-'+String(m).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');})(+new Date().getUTCFullYear(), +new Date().getUTCMonth()+1));
@@ -195,7 +195,7 @@ async function injectSchedMaint(live){
     const sbMap={}; mRows.forEach(r=>{ sbMap[num(r.bu)]={monthly:num(r.monthly), dueMTD:num(r.dueMTD), doneMTD:num(r.doneMTD)}; });
     const dailyByBu={}; mDailyRows.forEach(r=>{ const bu=num(r.bu); dailyByBu[bu]=dailyByBu[bu]||{}; dailyByBu[bu][r.d]={due:num(r.due),done:num(r.done)}; });
     const monthKey=new Date().toISOString().slice(0,7);
-    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; const st=sbMap[P.bu]||{monthly:0,dueMTD:0,doneMTD:0};
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(focus && P.key!==focus) continue; const st=sbMap[P.bu]||{monthly:0,dueMTD:0,doneMTD:0};
       const daily=Object.entries(dailyByBu[P.bu]||{}).sort((a,b)=>a[0]<b[0]?-1:1).map(([d,v])=>({d,due:v.due,done:v.done}));
       t.schedMaint={month:monthKey, monthly:st.monthly, dueMTD:st.dueMTD, doneMTD:st.doneMTD, daily}; }
   }catch(e){ console.error('schedMaint failed', e.message); }
@@ -203,10 +203,10 @@ async function injectSchedMaint(live){
 }
 
 // Target Output (Ton) series from productionEntryOee numShiftTargetQuantity, per date + UoM
-async function injectTgtOut(live){
+async function injectTgtOut(live, focus){
   try{
     const normU=n=>String(n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue;
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(focus && P.key!==focus) continue;
       try{
         const tRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{ sqlQuery:
           `SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numShiftTargetQuantity,0)) t FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName)) ORDER BY d DESC`, limit:3000});
@@ -221,7 +221,7 @@ async function injectTgtOut(live){
 
 // NPT% = Loss Time / (Shift Time - Planned Time), per BU/machine over the requested range (mes schema)
 // Batched: 2 queries for ALL BUs (loss + cap), then distributed in JS.
-async function injectNpt(live, reqFrom, reqTo, onlyKey){
+async function injectNpt(live, reqFrom, reqTo, focus){
   try{
     const nv=v=>+String(v==null?0:v).replace(/,/g,'');
     const dFrom = reqFrom || new Date(Date.now()-9*864e5).toISOString().slice(0,10);
@@ -233,7 +233,7 @@ async function injectNpt(live, reqFrom, reqTo, onlyKey){
     const lossByBu={}, capByBu={};
     lossAll.forEach(r=>{ const b=nv(r.bu); (lossByBu[b]=lossByBu[b]||{})[r.wc]=(lossByBu[b][r.wc]||0)+nv(r.loss); });
     capAll.forEach(r=>{ const b=nv(r.bu); const c=capByBu[b]=capByBu[b]||{}; const o=c[r.wc]=c[r.wc]||{shiftMin:0,plannedMin:0,availMin:0}; o.shiftMin+=nv(r.shiftMin); o.plannedMin+=nv(r.plannedMin); o.availMin+=nv(r.availMin); });
-    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(onlyKey && P.key!==onlyKey) continue; const buKey=P.bu;
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(focus && P.key!==focus) continue; if(focus && P.key!==focus) continue; const buKey=P.bu;
       try{
         const lossBy=lossByBu[buKey]||{}, capBy=capByBu[buKey]||{};
         const mf = {accl:['VRM-1','VRM-2'], apfil:['Loom'], ail:['Roughing Mill']}[P.key] || null;
@@ -264,7 +264,7 @@ async function injectNpt(live, reqFrom, reqTo, onlyKey){
 }
 
 // Corrected OEE (skill §10.2) — machine-filtered daily A/P/Q/OEE with corrected zeroing, batched (2 queries for all BUs)
-async function injectCorrectedOee(live, reqFrom, reqTo, onlyKey){
+async function injectCorrectedOee(live, reqFrom, reqTo, focus){
   try{
     const nv=v=>+String(v==null?0:v).replace(/,/g,'');
     const dFrom=reqFrom||new Date(Date.now()-9*864e5).toISOString().slice(0,10);
@@ -276,7 +276,7 @@ async function injectCorrectedOee(live, reqFrom, reqTo, onlyKey){
     const wasteKey={}; wRows.forEach(r=>{ wasteKey[nv(r.bu)+'|'+r.m+'|'+r.d]=nv(r.Waste); });
     const g=x=>x<=0?0:x;
     const byBu={}; rows.forEach(r=>{ const b=nv(r.bu); (byBu[b]=byBu[b]||{})[r.m]=byBu[b][r.m]||{}; const row=byBu[b][r.m][r.d]=byBu[b][r.m][r.d]||{Av:0,Npt:0,Dur:0,PlnDn:0,SmvOut:0,Out:0}; row.Av+=nv(r.Av); row.Npt+=nv(r.Npt); row.Dur+=nv(r.Dur); row.PlnDn+=nv(r.PlnDn); row.SmvOut+=nv(r.SmvOut); row.Out+=nv(r.Out); });
-    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(onlyKey && P.key!==onlyKey) continue;
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(focus && P.key!==focus) continue; if(focus && P.key!==focus) continue;
       const mf={accl:['VRM-1','VRM-2'], apfil:['Loom'], ail:['Roughing Mill']}[P.key]||null;
       const isF = m=> mf ? mf.some(x=>m.toLowerCase().indexOf(x.toLowerCase())>=0) : true;
       const bu=byBu[P.bu]||{}; const dates=new Set();
@@ -297,12 +297,12 @@ async function injectCorrectedOee(live, reqFrom, reqTo, onlyKey){
 }
 
 // Corrected Plan Variance (skill §10.3) — overlap predicate + window-bounded output, batched per BU
-async function injectCorrectedPlan(live, reqFrom, reqTo, onlyKey){
+async function injectCorrectedPlan(live, reqFrom, reqTo, focus){
   try{
     const nv=v=>+String(v==null?0:v).replace(/,/g,'');
     const dTo=reqTo||new Date().toISOString().slice(0,10);
     const dFrom=reqFrom||'1900-01-01';
-    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(onlyKey && P.key!==onlyKey) continue;
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue; if(focus && P.key!==focus) continue; if(focus && P.key!==focus) continue;
       try{
         const rows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
           `SELECT p.IntProductionPlanId id, p.StrProductionPlanCode code, p.IntPlannedQty planned, CONVERT(varchar(10),p.DtePlanFromDate,120) pf, CONVERT(varchar(10),p.DtePlanToDate,120) pt, ISNULL((SELECT SUM(pr.numQuantity) FROM mes.tblProductionRow pr WITH (NOLOCK) JOIN mes.tblProductionHeader h WITH (NOLOCK) ON h.IntProductionId=pr.IntProductionId AND h.IntItemId=pr.IntItemId AND h.IsActive=1 JOIN mes.tblProductionOrder po WITH (NOLOCK) ON po.IntProductionOrderId=pr.IntProductionOrderId AND po.IntItemId=h.IntItemId AND po.StrProductionPlanCode=p.StrProductionPlanCode WHERE h.IntPlantId=p.IntPlantId AND h.IntShopFloorId=p.IntShopFloorId AND pr.isActive=1 AND h.dteProductionDate BETWEEN p.DtePlanFromDate AND p.DtePlanToDate),0) outq FROM mes.tblProductionPlanning p WITH (NOLOCK) WHERE p.IntBusinessUnitId=${P.bu} AND p.IsActive=1 AND p.DtePlanFromDate <= '${dTo}' AND p.DtePlanToDate >= '${dFrom}' ORDER BY p.DtePlanFromDate`, limit:300});
@@ -322,13 +322,13 @@ module.exports = async (req, res) => {
     const wantLive = req.query.live === '1';
     const plant = req.query.plant;
     let data = live;
-    if (wantLive) data = await mergeLive(live);
+    if (wantLive) data = await mergeLive(live, req.query.focus);
     let out;
-    try { out = await injectMOH(data); } catch { out = data; }
-    try { out = await injectProductTargets(out); } catch {}
-    try { out = await injectPlanVar(out); } catch {}
-    try { out = await injectSchedMaint(out); } catch {}
-    try { out = await injectTgtOut(out); } catch {}
+    try { out = await injectMOH(data, req.query.focus); } catch { out = data; }
+    try { out = await injectProductTargets(out, req.query.focus); } catch {}
+    try { out = await injectPlanVar(out, req.query.focus); } catch {}
+    try { out = await injectSchedMaint(out, req.query.focus); } catch {}
+    try { out = await injectTgtOut(out, req.query.focus); } catch {}
     try { out = await injectNpt(out, req.query.from, req.query.to, req.query.focus); } catch {}
     try { out = await injectCorrectedOee(out, req.query.from, req.query.to, req.query.focus); } catch {}
     try { out = await injectCorrectedPlan(out, req.query.from, req.query.to, req.query.focus); } catch {}
