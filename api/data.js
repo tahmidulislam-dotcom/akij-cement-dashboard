@@ -260,6 +260,51 @@ async function injectNpt(live, reqFrom, reqTo){
   return live;
 }
 
+// Corrected OEE (skill §10.2) — machine-filtered daily A/P/Q/OEE with corrected zeroing
+async function injectCorrectedOee(live, reqFrom, reqTo){
+  try{
+    const nv=v=>+String(v==null?0:v).replace(/,/g,'');
+    const mf={accl:['VRM-1','VRM-2'], apfil:['Loom'], ail:['Roughing Mill']};
+    const dFrom=reqFrom||new Date(Date.now()-9*864e5).toISOString().slice(0,10);
+    const dTo=reqTo||new Date().toISOString().slice(0,10);
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue;
+      const mfl=(mf[P.key]||[]); const mcond=mfl.length?` AND (${mfl.map(m=>`strMachineName LIKE '${m}%'`).join(' OR ')})`:'';
+      try{
+        const rows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+          `SELECT CONVERT(varchar(10),dteProductionDate,23) d, SUM(ISNULL(numAvailableMinute,0)) Av, SUM(ISNULL(numNptLossTimeInMinutes,0)) Npt, SUM(ISNULL(numShiftDurationMinute,0)) Dur, SUM(ISNULL(numPlannedDowntimeMin,0)) PlnDn, SUM(ISNULL(numSMVCycleTime,0)*ISNULL(numActualOutputQuantity,0)) SmvOut, SUM(ISNULL(numActualOutputQuantity,0)) Out FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 ${mcond} AND dteProductionDate >= '${dFrom}' AND dteProductionDate <= '${dTo}' GROUP BY CONVERT(varchar(10),dteProductionDate,23) ORDER BY d DESC`, limit:200});
+        const wRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+          `SELECT CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) Waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 ${mcond} AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}' GROUP BY CONVERT(varchar(10),h.dteProductionDate,23)`, limit:200});
+        const wasteBy={}; wRows.forEach(r=>{ wasteBy[r.d]=nv(r.Waste); });
+        const g=x=>x<=0?0:x;
+        t.oeeV2=rows.map(r=>{ const Av=nv(r.Av),Npt=nv(r.Npt),Dur=nv(r.Dur),PlnDn=nv(r.PlnDn),SmvOut=nv(r.SmvOut),Out=nv(r.Out),Waste=wasteBy[r.d]||0;
+          const A=g(Dur-PlnDn)===0?0:Math.min(g(Av-Npt)/g(Dur-PlnDn),1);
+          const P=g(Av)===0?0:Math.min(SmvOut/g(Av),1);
+          const Q=g(Out)===0?0:Math.min(g(Out-Waste)/g(Out),1);
+          return {d:r.d,A:+(A*100).toFixed(2),P:+(P*100).toFixed(2),Q:+(Q*100).toFixed(2),OEE:+(A*P*Q*100).toFixed(2)}; });
+      }catch(e){ console.error('  oeeV2 '+P.key+' failed', e.message); t.oeeV2=[]; }
+    }
+  }catch(e){ console.error('oeeV2 failed', e.message); }
+  return live;
+}
+
+// Corrected Plan Variance (skill §10.3) — overlap predicate + window-bounded output
+async function injectCorrectedPlan(live, reqFrom, reqTo){
+  try{
+    const nv=v=>+String(v==null?0:v).replace(/,/g,'');
+    const dTo=reqTo||new Date().toISOString().slice(0,10);
+    const dFrom=reqFrom||'1900-01-01';
+    for(const P of PLANTS){ const t=live.plants?.[P.key]; if(!t) continue;
+      try{
+        const rows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+          `SELECT p.IntProductionPlanId id, p.StrProductionPlanCode code, p.IntPlannedQty planned, CONVERT(varchar(10),p.DtePlanFromDate,120) pf, CONVERT(varchar(10),p.DtePlanToDate,120) pt, ISNULL((SELECT SUM(pr.numQuantity) FROM mes.tblProductionRow pr WITH (NOLOCK) JOIN mes.tblProductionHeader h WITH (NOLOCK) ON h.IntProductionId=pr.IntProductionId AND h.IntItemId=pr.IntItemId AND h.IsActive=1 JOIN mes.tblProductionOrder po WITH (NOLOCK) ON po.IntProductionOrderId=pr.IntProductionOrderId AND po.IntItemId=h.IntItemId AND po.StrProductionPlanCode=p.StrProductionPlanCode WHERE h.IntPlantId=p.IntPlantId AND h.IntShopFloorId=p.IntShopFloorId AND pr.isActive=1 AND h.dteProductionDate BETWEEN p.DtePlanFromDate AND p.DtePlanToDate),0) outq FROM mes.tblProductionPlanning p WITH (NOLOCK) WHERE p.IntBusinessUnitId=${P.bu} AND p.IsActive=1 AND p.DtePlanFromDate <= '${dTo}' AND p.DtePlanToDate >= '${dFrom}' ORDER BY p.DtePlanFromDate`, limit:300});
+        t.planV2=rows.map(r=>{ const planned=nv(r.planned),outq=nv(r.outq); const n2=x=>x==null?0:x;
+          return {id:nv(r.id),code:r.code,planned,outq,diff:+(outq-planned).toFixed(2),prog:planned>0?+(outq/planned*100).toFixed(2):null,from:r.pf,to:r.pt}; });
+      }catch(e){ console.error('  planV2 '+P.key+' failed', e.message); t.planV2=[]; }
+    }
+  }catch(e){ console.error('planV2 failed', e.message); }
+  return live;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');
@@ -276,6 +321,8 @@ module.exports = async (req, res) => {
     try { out = await injectSchedMaint(out); } catch {}
     try { out = await injectTgtOut(out); } catch {}
     try { out = await injectNpt(out, req.query.from, req.query.to); } catch {}
+    try { out = await injectCorrectedOee(out, req.query.from, req.query.to); } catch {}
+    try { out = await injectCorrectedPlan(out, req.query.from, req.query.to); } catch {}
     if (plant) { const p = out.plants?.[plant]; if (!p) return res.status(404).json({error:`Plant ${plant} not found`, available: out.order}); return res.status(200).json({plant:p, meta:p.meta, generated:out.generated}); }
     return res.status(200).json(out);
   } catch (e) { return res.status(500).json({ error: e.message }); }

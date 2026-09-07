@@ -683,6 +683,16 @@ function render(){
   const D = P.daily.filter(r=>inRange(r.d));
   const agg = plantOEE(D);
   const loadingTot = D.reduce((s,r)=>s+r.l,0);
+  // Corrected OEE (skill §10.2, machine-filtered) — average per-day A/P/Q/OEE over the selected range
+  const haveV2 = (P.oeeV2&&P.oeeV2.length) ? P.oeeV2.filter(r=>inRange(r.d)) : [];
+  const correctedAgg = haveV2.length ? {
+    A: haveV2.reduce((s,r)=>s+r.A,0)/haveV2.length,
+    P: haveV2.reduce((s,r)=>s+r.P,0)/haveV2.length,
+    Q: haveV2.filter(r=>r.Q!=null).reduce((s,r)=>s+r.Q,0)/(haveV2.filter(r=>r.Q!=null).length||1),
+    OEE: haveV2.reduce((s,r)=>s+r.OEE,0)/haveV2.length,
+    n: haveV2.length, src:'corrected'
+  } : {src:'legacy'};
+  const useAgg = correctedAgg.src==='corrected' ? correctedAgg : agg;
 
   /* ---- NPT ---- */
   const nptCats = {};
@@ -723,6 +733,12 @@ function render(){
   const pvStat = planVarStat(FROM,TO);
   // Planning Achievement: avg % across all products from production-plan variance when available, else plan-vs-actual
   const planAch = pvStat.avgPct!=null ? pvStat.avgPct/100 : pvCard.ach;
+  // Corrected plan variance (skill §10.3): overlap + window-bounded output
+  const planV2Stat = (()=>{ const rows=(P.planV2||[]).filter(r=>r.from<=TO&&r.to>=FROM); if(!rows.length) return null;
+    const progs=rows.filter(r=>r.prog!=null).map(r=>r.prog); const avg=progs.length?progs.reduce((s,x)=>s+x,0)/progs.length:null;
+    const totPlan=rows.reduce((s,r)=>s+(r.planned||0),0), totOut=rows.reduce((s,r)=>s+(r.outq||0),0), totDiff=rows.reduce((s,r)=>s+(r.diff||0),0);
+    return {n:rows.length, avgPct:avg, totPlan, totOut, totDiff, corrected:true}; })();
+  const pStat = planV2Stat || pvStat;
 
   // Targets (from iBOSDD + fixed defaults). Excluded (no target) for ARMCL all plants + ABSL.
   const NO_TARGET_PLANTS = ['armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','absl'];
@@ -773,11 +789,11 @@ function render(){
   })();
 
   const kpis = [
-    {l:'Production OEE', v:pct(agg.OEE), s:(agg.A==null?`Runtime capture starts ${P.meta.rtStart}`:`A ${pct(agg.A,0)} · P ${pct(agg.P,0)} · Q ${pct(agg.Q,0)}`)+(function(){const t=oeeTgt((TO||P.meta.maxDate).slice(0,7));return (t!=null)?`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">OEE Target ${t}%</div>`:'';})(), ac:'var(--teal)'},
+    {l:'Production OEE', v:pct(useAgg.OEE), s:(useAgg.A==null?`Runtime capture starts ${P.meta.rtStart}`:`A ${pct(useAgg.A,0)} · P ${pct(useAgg.P,0)} · Q ${pct(useAgg.Q,0)}`)+(function(){const t=oeeTgt((TO||P.meta.maxDate).slice(0,7));return (t!=null)?`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">OEE Target ${t}%</div>`:'';}())+(useAgg.src==='corrected'?`<div style="margin-top:4px;color:var(--mut);font-size:10.5px">corrected OEE (Avail÷(Shift−Planned) × P × Q)</div>`:''), ac:'var(--teal)'},
     {l:'Capacity Utilization', v:pct(agg.CU), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.cu,0)}`).join(' · '), ac:'var(--blue)'},
     {l:'NPT (Non-Productive Time)', v:(function(){ const ni=P.nptInfo; if(ni&&ni.combined){ const c=ni.combined; return (c.npt!=null?c.npt.toFixed(1)+'%':'—'); } return pct(nptPct); })(), s:(function(){ const ni=P.nptInfo; if(ni&&ni.combined){ const c=ni.combined; return `${fmt(c.loss,0)} min loss ÷ ${fmt(c.avail,0)} min available (${fmt(c.shift,0)} − ${fmt(c.planned,0)} planned)`; } return `${fmt(nptMin/60,0)} hrs NPT vs ${fmt(loadingTot/60,0)} hrs loading`; })(), ac:'var(--red)'},
     {l:'Yield', v:pct(agg.Q), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.y,1)}`).join(' · ')+tgtLine(YIELD_TGT!=null?YIELD_TGT+'%':null), ac:'var(--green)'},
-    {l:'Planning Achievement', v:(pvStat.avgPct!=null?fmt(pvStat.avgPct,1)+'%':'—'), s:(pvStat.n?`avg of ${pvStat.n} product line(s) · ${pvStat.totDiff>=0?'+':''}${fmt(pvStat.totDiff,0)} (out − plan)`: 'No plan variance data in range')+(pvStat.n?`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${fmt(pvStat.totPlan,0)} planned</div>`:''), ac:'var(--amber)'},
+    {l:'Planning Achievement', v:(pStat.avgPct!=null?fmt(pStat.avgPct,1)+'%':'—'), s:(pStat.n?`avg of ${pStat.n} product line(s) · ${pStat.totDiff>=0?'+':''}${fmt(pStat.totDiff,0)} (out − plan)`+(!pStat.corrected?` · unverified`:''): 'No plan variance data in range')+(pStat.n?`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${fmt(pStat.totPlan,0)} planned</div>`:''), ac:'var(--amber)'},
     {l:'Scheduled Maintenance', v:(function(){ const sm=P.schedMaint; return sm?`${fmt(sm.doneMTD,0)} / ${fmt(sm.monthly,0)}`:(fmt(smMin/60,0)+' h'); })(), s:(function(){ const sm=P.schedMaint; if(sm){ const asOf=(P.meta.maxDate||'').slice(0,10); const m=sm.month||'';
       return `${fmt(sm.monthly,0)} monthly target · ${fmt(sm.dueMTD,0)} due (${m}-01 → ${asOf||m})`; } return `${smEvt} planned events`; })(), ac:'var(--blue)'},
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},

@@ -617,6 +617,59 @@ const server = http.createServer(async (req, res) => {
               }catch(e){ console.error('  nptInfo '+P.key+' failed', e.message); tgt.nptInfo={bu:buKey, company:(tgt.meta&&tgt.meta.name)||P.key, formula:'NPT% = Loss Time / (Shift Time − Planned Time)', from:dFrom||reqFrom, to:dTo||reqTo, combined:{loss:0,shift:0,planned:0,avail:0,npt:null,status:'noData',hasData:false,filtered:false}, machines:[], error:e.message}; }
             }
           }catch(e){ console.error('nptInfo failed', e.message); }
+          // Corrected OEE (skill §10.2) — replace buggy OEE: Availability/Performance/Quality read from
+          // tblOeeProdWasteHeader+Row with corrected zeroing, per SBU/date. Sum factor terms across rows.
+          try{
+            const nv=v=>+String(v==null?0:v).replace(/,/g,'');
+            const mf = {accl:['VRM-1','VRM-2'], apfil:['Loom'], ail:['Roughing Mill']};
+            for(const P of PLANTS_LIVE){
+              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              const mfl = (mf[P.key]||[]);
+              const mcond = mfl.length ? ` AND (${mfl.map(m=>`strMachineName LIKE '${m}%'`).join(' OR ')})` : '';
+              try{
+                const rows=await ibosQuery(`SELECT CONVERT(varchar(10),dteProductionDate,23) d,
+                  SUM(ISNULL(numAvailableMinute,0)) Av,
+                  SUM(ISNULL(numNptLossTimeInMinutes,0)) Npt,
+                  SUM(ISNULL(numShiftDurationMinute,0)) Dur,
+                  SUM(ISNULL(numPlannedDowntimeMin,0)) PlnDn,
+                  SUM(ISNULL(numSMVCycleTime,0)*ISNULL(numActualOutputQuantity,0)) SmvOut,
+                  SUM(ISNULL(numActualOutputQuantity,0)) Out
+                  FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 ${mcond} AND dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10),dteProductionDate,23) ORDER BY d DESC`, 200);
+                const wRows=await ibosQuery(`SELECT CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) Waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 ${mcond} AND h.dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10),h.dteProductionDate,23)`, 200);
+                const wasteBy={}; wRows.forEach(r=>{ wasteBy[r.d]=nv(r.Waste); });
+                const g=s=>s<=0?0:s;
+                tgt.oeeV2=rows.map(r=>{
+                  const Av=nv(r.Av), Npt=nv(r.Npt), Dur=nv(r.Dur), PlnDn=nv(r.PlnDn), SmvOut=nv(r.SmvOut), Out=nv(r.Out);
+                  const Waste=wasteBy[r.d]||0;
+                  const A = g(Dur-PlnDn)===0?0:Math.min(g(Av-Npt)/g(Dur-PlnDn),1);
+                  const P = g(Av)===0?0:Math.min(SmvOut/g(Av),1);
+                  const Q = g(Out)===0?0:Math.min(g(Out-Waste)/g(Out),1);
+                  const OEE = A*P*Q;
+                  return {d:r.d, A:+(A*100).toFixed(2), P:+(P*100).toFixed(2), Q:+(Q*100).toFixed(2), OEE:+(OEE*100).toFixed(2)};
+                });
+              }catch(e){ console.error('  oeeV2 '+P.key+' failed', e.message); tgt.oeeV2=[]; }
+            }
+          }catch(e){ console.error('oeeV2 failed', e.message); }
+          // Corrected Plan Variance (skill §10.3) — overlap predicate + window-bounded output, per SBU
+          try{
+            const nv=v=>+String(v==null?0:v).replace(/,/g,'');
+            for(const P of PLANTS_LIVE){
+              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              try{
+                const rows=await ibosQuery(`SELECT p.IntProductionPlanId id, p.StrProductionPlanCode code, p.IntPlannedQty planned,
+                  CONVERT(varchar(10),p.DtePlanFromDate,120) pf, CONVERT(varchar(10),p.DtePlanToDate,120) pt,
+                  ISNULL((SELECT SUM(pr.numQuantity) FROM mes.tblProductionRow pr WITH (NOLOCK) JOIN mes.tblProductionHeader h WITH (NOLOCK) ON h.IntProductionId=pr.IntProductionId AND h.IntItemId=pr.IntItemId AND h.IsActive=1 JOIN mes.tblProductionOrder po WITH (NOLOCK) ON po.IntProductionOrderId=pr.IntProductionOrderId AND po.IntItemId=h.IntItemId AND po.StrProductionPlanCode=p.StrProductionPlanCode WHERE h.IntPlantId=p.IntPlantId AND h.IntShopFloorId=p.IntShopFloorId AND pr.isActive=1 AND h.dteProductionDate BETWEEN p.DtePlanFromDate AND p.DtePlanToDate),0) outq
+                  FROM mes.tblProductionPlanning p WITH (NOLOCK) WHERE p.IntBusinessUnitId=${P.bu} AND p.IsActive=1 AND p.DtePlanFromDate <= '${reqTo||new Date().toISOString().slice(0,10)}' AND p.DtePlanToDate >= '${reqFrom||''}' ORDER BY p.DtePlanFromDate`, 200);
+                const nv2=x=>x==null?0:nv(x);
+                tgt.planV2=rows.map(r=>{
+                  const planned=nv2(r.planned), outq=nv2(r.outq);
+                  const diff=+(outq-planned).toFixed(2);
+                  const prog=planned>0?+(outq/planned*100).toFixed(2):null;
+                  return {id:nv(r.id), code:r.code, planned, outq, diff, prog, from:r.pf, to:r.pt};
+                });
+              }catch(e){ console.error('  planV2 '+P.key+' failed', e.message); tgt.planV2=[]; }
+            }
+          }catch(e){ console.error('planV2 failed', e.message); }
         }catch(e){ console.error('data merge failed', e.message); }
       }
       const plant=url.searchParams.get('plant');
