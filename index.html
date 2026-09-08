@@ -37,6 +37,13 @@ h1 .co{color:var(--teal)}
 .kpi .lbl{font-size:10.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px;font-weight:600}
 .kpi .val{font-size:24px;font-weight:700;margin-top:5px;color:var(--ac,var(--teal))}
 .kpi .sub{font-size:11px;color:var(--mut);margin-top:4px;min-height:14px}
+.kpi3{display:flex;flex-direction:column;gap:10px}
+.kpi3 .k{background:linear-gradient(145deg,var(--card),#121d33);border:1px solid var(--line);border-radius:10px;padding:11px 13px;position:relative;overflow:hidden;cursor:help}
+.kpi3 .k::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--ac,var(--teal))}
+.kpi3 .k .lbl{font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+.kpi3 .k .val{font-size:21px;font-weight:700;margin-top:3px;color:var(--ac,var(--teal))}
+.kpi3 .k .sub{font-size:10.5px;color:var(--mut);margin-top:3px;line-height:1.5}
+.kpi3 .k .tr{font-size:10px;color:#8fa3c0;margin-top:4px;border-top:1px dashed var(--line);padding-top:4px;line-height:1.5}
 /* Grid panels */
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 17px;grid-column:span 12}
@@ -91,10 +98,11 @@ tr:last-child td{border-bottom:none}
     <span style="font-size:11px;color:var(--mut)" id="liveStatus"></span>
   </div>
 </header>
-<div id="todayBanner" style="display:none;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35);color:var(--amber);padding:8px 12px;border-radius:8px;font-size:12.5px;margin-bottom:12px"></div>
+<div id="todayBanner" style="display:none;background:rgba(45,212,191,.10);border:1px solid rgba(45,212,191,.30);color:var(--teal);padding:8px 12px;border-radius:8px;font-size:12.5px;margin-bottom:12px"></div>
 
 <!-- FILTERS -->
 <div class="filters">
+  <div class="fld"><label>Business Unit</label><select id="buSel"></select></div>
   <div class="fld"><label>Plant</label><select id="plantSel"></select></div>
   <div class="fld"><label>Year</label><select id="yearSel"></select></div>
   <div class="fld"><label>From Date</label><input type="date" id="fromDate"></div>
@@ -107,6 +115,34 @@ tr:last-child td{border-bottom:none}
 
 <!-- KPI CARDS -->
 <div class="kpis" id="kpiGrid"></div>
+
+<!-- 3 traceable KPI blocks: Plan Variance / MOH / Scheduled Maintenance -->
+<div class="grid" style="margin-top:16px" id="kpiBlocks">
+  <div class="panel c4">
+    <h3>📋 Production Plan Variance</h3>
+    <div class="note">Avg Overall Progress + Target Set · plan-window within period</div>
+    <div id="kpiPv" class="kpi3"></div>
+  </div>
+  <div class="panel c4">
+    <h3>💰 MOH — Manufacturing Overhead</h3>
+    <div class="note">GL 4010001 · net MOH (production-received entries are negative)</div>
+    <div id="kpiMoh" class="kpi3"></div>
+  </div>
+  <div class="panel c4">
+    <h3>🔧 Scheduled Maintenance</h3>
+    <div class="note">done / total · no percentage</div>
+    <div id="kpiMaint" class="kpi3"></div>
+  </div>
+</div>
+
+<!-- OEE Machine Performance & Loss Summary (per machine) -->
+<div class="panel c12" id="oeeSummaryPanel" style="display:none">
+  <h3>⚙️ OEE Machine Performance &amp; Loss Summary — <span id="oeeSummaryTitle">—</span></h3>
+  <div class="note">Per machine · Capacity = Rated Cap/hr × Shift/60 · Achieve = Production/Target · CapUtil = Production/Capacity · Yield = Good/Production · OEE = Avail÷(Shift−Planned) × P × Q</div>
+  <div style="overflow-x:auto;margin-top:8px">
+  <table id="oeeSummaryTable" style="width:100%;border-collapse:collapse;font-size:12px"></table>
+  </div>
+</div>
 
 <div class="grid">
   <!-- OEE Trend -->
@@ -163,16 +199,10 @@ tr:last-child td{border-bottom:none}
   </div>
 
   <!-- Planning -->
-  <div class="panel c7">
+  <div class="panel c12">
     <h3>Planning Achievement — Plan vs Actual</h3>
     <div class="note">Monthly plan vs actual good output (dominant UoM) · achievement % line</div>
     <div class="ch"><canvas id="chPlan"></canvas></div>
-  </div>
-  <!-- RCA status -->
-  <div class="panel c5">
-    <h3>Root Cause Analysis — Action Status</h3>
-    <div class="note">RCAAP (5-Why) corrective actions</div>
-    <div class="ch"><canvas id="chRca"></canvas></div>
   </div>
 
   <!-- Schedule Maintenance -->
@@ -180,14 +210,6 @@ tr:last-child td{border-bottom:none}
     <h3>Scheduled Maintenance</h3>
     <div class="note">Preventive / scheduled maintenance jobs — monthly target vs month-to-date done (due per day)</div>
     <div class="ch"><canvas id="chSm"></canvas></div>
-  </div>
-
-  <!-- Overtime -->
-  <div class="panel" id="otPanel">
-    <h3>Overtime</h3>
-    <div class="note">Daily OT actual vs per-day target (monthly target ÷ 30) · <span id="otNote">—</span></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:10px 0" id="otKpi"></div>
-    <div class="ch"><canvas id="chOt"></canvas></div>
   </div>
 
   <!-- MOH -->
@@ -207,15 +229,6 @@ tr:last-child td{border-bottom:none}
     <div style="font-size:11px;color:var(--mut);margin-top:8px" id="mohBudgetNote"></div>
   </div>
 
-  <!-- RCA Table -->
-  <div class="panel">
-    <h3>Root Cause Analysis Register (5-Why)</h3>
-    <div class="note">Source: mes.tblRCAAP — <span id="rcaPlantNote">selected plant</span></div>
-    <div style="overflow-x:auto"><table id="rcaTable">
-      <thead><tr><th>#</th><th>Identified Potential Cause</th><th>5-Why Chain</th><th>Countermeasure / Action</th><th>Status</th><th>Schedule</th><th>Completed</th></tr></thead>
-      <tbody></tbody>
-    </table></div>
-  </div>
   <!-- AI ANALYSIS AGENT -->
   <div class="panel" id="aiPanel">
     <h3>🤖 AI Analysis Agent</h3>
@@ -331,13 +344,6 @@ function oeeTgt(ym){
   return (v==null || v===0) ? null : v;
 }
 
-/* ---------- Overtime (daily actual + monthly target, per plant) ---------- */
-const OT_CFG = {
-  accl: { name:'ACCL', target: 1087700, daily:{'2026-08-01':12421.18,'2026-08-02':9784.42,'2026-08-03':13869.57,'2026-08-04':11985.86,'2026-08-05':0,'2026-08-06':9815.37,'2026-08-07':13839.45,'2026-08-08':13128.32,'2026-08-09':2034.17,'2026-08-10':7121.12,'2026-08-11':25636.57,'2026-08-12':25252.10,'2026-08-13':19423.71,'2026-08-14':15694.33,'2026-08-15':21603.35,'2026-08-16':26204.43,'2026-08-17':22334.16,'2026-08-18':19753.90,'2026-08-19':25171.69,'2026-08-20':16218.71,'2026-08-21':12414.93,'2026-08-22':15211.03,'2026-08-23':17877.37,'2026-08-24':34048.35,'2026-08-25':30010.30,'2026-08-26':175.00,'2026-08-27':27712.02,'2026-08-28':15161.16,'2026-08-29':37562.01,'2026-08-30':39053.00,'2026-08-31':0} },
-  ail:  { name:'AIL', target: null, daily:{'2026-08-01':44374.37,'2026-08-02':31588.94,'2026-08-03':41569.91,'2026-08-04':44791.67,'2026-08-05':8066.13,'2026-08-06':34513.97,'2026-08-07':31846.72,'2026-08-08':36989.82,'2026-08-09':18001.00,'2026-08-10':15991.07,'2026-08-11':14132.20,'2026-08-12':15922.37,'2026-08-13':23069.01,'2026-08-14':18965.81,'2026-08-15':5025.78,'2026-08-16':8603.62,'2026-08-17':17308.95,'2026-08-18':16890.72,'2026-08-19':14009.46,'2026-08-20':15532.06,'2026-08-21':11886.92,'2026-08-22':41246.50,'2026-08-23':10605.48,'2026-08-24':11369.84,'2026-08-25':9593.40,'2026-08-26':3927.03,'2026-08-27':9740.48,'2026-08-28':14965.17,'2026-08-29':10099.08,'2026-08-30':15956.83,'2026-08-31':9339.80} },
-  apfil:{ name:'APFIL', target: 521500, daily:{'2026-08-01':18899.12,'2026-08-02':18014.84,'2026-08-03':2789.28,'2026-08-04':14506.60,'2026-08-05':0,'2026-08-06':7945.56,'2026-08-07':10205.29,'2026-08-08':13237.12,'2026-08-09':17314.76,'2026-08-10':10161.76,'2026-08-11':19615.68,'2026-08-12':9769.84,'2026-08-13':22348.79,'2026-08-14':15340.03,'2026-08-15':14584.16,'2026-08-16':15451.34,'2026-08-17':24762.20,'2026-08-18':27824.54,'2026-08-19':21555.78,'2026-08-20':30004.25,'2026-08-21':15860.44,'2026-08-22':17258.12,'2026-08-23':25845.04,'2026-08-24':18724.53,'2026-08-25':17525.44,'2026-08-26':0,'2026-08-27':22116.96,'2026-08-28':8540.00,'2026-08-29':12607.81,'2026-08-30':14015.66,'2026-08-31':0} },
-};
-
 /* ---------- KPI helpers (data from iBOSDD) ---------- */
 async function fetchLiveData(){
   const liveEl=document.querySelector('.live');
@@ -375,26 +381,26 @@ async function refreshLive(){
       const prevMax=(DATA.plants?.[PLANT]?.meta?.maxDate)||'';
       DATA=live;
       P=DATA.plants[PLANT];
-      // extend TO/from-date bounds & sync banner with the fresh maxDate
-      const maxAllowed=(P.meta.maxDate||P.meta.maxDate);
-      let newMax=P.meta.maxDate;
-      if(newMax && newMax > (TO||'')) { TO=newMax; }
-      // re-apply picker min/max (allow latest available)
-      $('toDate').max=maxAllowed; $('fromDate').max=maxAllowed;
-      if((TO||'') < (newMax||'')) { $('toDate').value=newMax; TO=newMax; }
-      // if user was on "today"/latest, keep them there
+      const newMax=P.meta.maxDate;
+      // Update picker min/max to the fresh bounds — but keep the user's selected FROM/TO unchanged.
+      const dhakaToday=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
+      const maxAllowed = (dhakaToday > newMax) ? dhakaToday : newMax;
+      ['fromDate','toDate','aiFrom','aiTo'].forEach(id=>{ const el=$(id); if(el){ el.min=P.meta.minDate; el.max=maxAllowed; } });
       render();
       const changed = newMax && newMax !== prevMax;
       if(st) st.textContent = changed
         ? `Live updated → latest ${newMax} ✔`
         : `Latest available: ${newMax||'—'} ✔`;
       setTimeout(()=>{ if(st) st.textContent=''; }, 5000);
-      // refresh banner
+      // refresh banner — show a subtle, non-alarming "latest available" note (data always renders)
       const banner=$('todayBanner');
       if(banner){
-        const dhakaToday=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
-        if(dhakaToday > newMax){ banner.style.display='block'; }
-        else banner.style.display='none';
+        if(newMax){
+          banner.innerHTML=`● Live data — latest available <b>${newMax}</b> (ETL ~02:00 Dhaka)`;
+          banner.style.display='block';
+        } else {
+          banner.style.display='none';
+        }
       }
     } else {
       if(st) st.textContent=`No live data available for ${live.date} — check after ETL (02:00 Dhaka)`;
@@ -402,6 +408,12 @@ async function refreshLive(){
   }catch(e){
     console.warn('refreshLive failed',e);
     if(st) st.textContent=`Live refresh failed — ${e.message}`;
+    const banner=$('todayBanner');
+    if(banner){
+      const mx=(P&&P.meta&&P.meta.maxDate)||'';
+      banner.innerHTML=mx?`● Live data — latest available <b>${mx}</b>`:`● Data loaded`;
+      banner.style.display='block';
+    }
   }
   if(btn) btn.textContent='↻ Refresh Live';
 }
@@ -409,14 +421,27 @@ async function init(){
   const liveEl=document.querySelector('.live');
   if(liveEl) liveEl.textContent='● LOADING LIVE MCP…';
   await fetchLiveData();
-  $('plantSel').innerHTML = DATA.order.map(k=>`<option value="${k}">${DATA.names[k]}</option>`).join('');
+  const BU_NAMES={4:'ACCL · Akij Cement',8:'APFIL · Poly Fibre',144:'AEL · Essentials',175:'ARMCL · Ready Mix',188:'HRML · Rice',189:'FAL · Fariq Agro',220:'ABSL · Building Solutions',224:'AIL · Ispat',232:'AAFL · Agro Feed',237:'ALEL · Light Engineering'};
+  const buMap={};
+  DATA.order.forEach(k=>{ const bu=(DATA.plants[k]&&DATA.plants[k].meta&&DATA.plants[k].meta.bu)||0; (buMap[bu]=buMap[bu]||[]).push(k); });
+  const buOrder=Object.keys(buMap).map(Number).sort((a,b)=>{ const na=(BU_NAMES[a]||('BU '+a)); const nb=(BU_NAMES[b]||('BU '+b)); return na<nb?-1:1; });
+  $('buSel').innerHTML = buOrder.map(bu=>`<option value="${bu}">${BU_NAMES[bu]||('Business Unit '+bu)}</option>`).join('');
+  const fillPlants = (bu)=>{
+    const keys=(bu!=null&&buMap[bu])?buMap[bu]:DATA.order;
+    $('plantSel').innerHTML = keys.map(k=>`<option value="${k}">${DATA.names[k]}</option>`).join('');
+    return keys[0];
+  };
+  $('buSel').addEventListener('change', ()=>{ const k=fillPlants(Number($('buSel').value)); setPlant(k); });
   $('plantSel').addEventListener('change', ()=> setPlant($('plantSel').value));
+  const defBu = buMap[4]?4:buOrder[0];
+  $('buSel').value = String(defBu);
+  const firstKey = fillPlants(defBu);
   $('yearSel').addEventListener('change', ()=>{
     const y = $('yearSel').value;
     if(y==='All Years'){ $('fromDate').value=P.meta.minDate; $('toDate').value=P.meta.maxDate; applyFilters(); }
     else { $('fromDate').value = `${y}-01-01`; $('toDate').value = `${y}-12-31`; applyFilters(); }
   });
-  setPlant(DATA.order[0]);
+  setPlant(firstKey);
   // Auto-refresh twice a day (6:00 AM + 6:00 PM Dhaka), only when tab visible; manual refresh button works anytime.
   scheduleDailyRefresh();
 }
@@ -438,17 +463,17 @@ function setPlant(key){
   const maxAllowed = dhakaToday > P.meta.maxDate ? dhakaToday : P.meta.maxDate;
   ['fromDate','toDate','aiFrom','aiTo'].forEach(id=>{ $(id).min=P.meta.minDate; $(id).max=maxAllowed; });
   $('fromDate').value=P.meta.minDate; $('toDate').value=P.meta.maxDate;
-  // Default view: today (or latest available date if today not yet in data) — show today's value on open
+  // Default view: current month (1st of month → today, or latest available if no current-month data yet)
   let dflt = (dhakaToday <= P.meta.maxDate) ? dhakaToday : P.meta.maxDate;
-  $('fromDate').value=dflt; $('toDate').value=dflt;
-  FROM=dflt; TO=dflt;
-  // show banner if today > maxDate (ETL pending)
+  const monthStart = dhakaToday.slice(0,7)+'-01';
+  const f = (monthStart <= dflt) ? monthStart : dflt;
+  $('fromDate').value=f; $('toDate').value=dflt;
+  FROM=f; TO=dflt;
+  // Banner is set by refreshLive() with the fresh live maxDate — show "loading" until then.
   const banner=$('todayBanner');
   if(banner){
-    if(dhakaToday > P.meta.maxDate){
-      banner.innerHTML=`⚠ No data yet for today <b>${dhakaToday}</b> — last available <b>${P.meta.maxDate}</b> (ETL typically at 02:00 Dhaka). Use <b>Refresh Live</b> or check after ETL.`;
-      banner.style.display='block';
-    } else banner.style.display='none';
+    banner.innerHTML=`⟳ Loading live data for <b>${P.meta.name}</b>…`;
+    banner.style.display='block';
   }
   const years=['All Years',...P.meta.years];
   $('yearSel').innerHTML=years.map(y=>`<option value="${y}">${y}</option>`).join('');
@@ -456,41 +481,12 @@ function setPlant(key){
   lastReport=null;
   $('reportArea').innerHTML=`Report will appear here. Choose a period and click <b>Generate Analysis</b> for <b>${P.meta.name}</b>.`;
   $('aiStatus').textContent=''; $('emStatus').textContent='';
-  const rn=$('rcaPlantNote'); if(rn) rn.textContent=P.meta.name;
   render();
   loadMachineOee();
-  renderOvertime();
+  // fetch live data for the newly selected plant (was only fetched for the initial plant)
+  refreshLive();
 }
-/* ---- Overtime (daily actual vs per-day target) ---- */
-function renderOvertime(){
-  const panel=$('otPanel'); if(!panel) return;
-  const cfg=OT_CFG[PLANT];
-  if(!cfg){ panel.style.display='none'; return; }
-  panel.style.display='';
-  const note=$('otNote');
-  const days=Object.keys(cfg.daily).sort();
-  const perDayTgt = cfg.target!=null ? cfg.target/30 : null;
-  const today=(TO||P.meta.maxDate).slice(0,10);
-  const todayActual = cfg.daily[days.find(d=>d<=today)||days[days.length-1]]||0;
-  const monthTotal = days.reduce((s,d)=>s+(cfg.daily[d]||0),0);
-  if(note) note.textContent=`${cfg.name} · Aug-26 · target/day ${perDayTgt!=null?fmt(perDayTgt,0):'no target'} · monthly actual ${fmt(monthTotal,0)}`;
-  const kpi=$('otKpi');
-  kpi.innerHTML=[
-    {l:'OT Actual (today)', v:fmt(todayActual,0), ac:'var(--amber)'},
-    {l:'OT Target / day', v:perDayTgt!=null?fmt(perDayTgt,0):'—', ac:'var(--blue)'},
-    {l:'OT Month Total', v:fmt(monthTotal,0), ac:'var(--green)'},
-  ].map(k=>`<div class="kpi" style="--ac:${k.ac};padding:10px 12px"><div class="lbl">${k.l}</div><div class="val" style="font-size:20px">${k.v}</div></div>`).join('');
-  // chart: daily actual bar + target line
-  if(charts.ot) charts.ot.destroy();
-  const labels=days.map(d=>d.slice(8));
-  const vals=days.map(d=>cfg.daily[d]||0);
-  charts.ot=new Chart($('chOt'),{data:{labels,datasets:[
-    {type:'bar',label:'OT Actual (৳)',data:vals,backgroundColor:'rgba(251,191,36,.7)',borderRadius:4},
-    ...(perDayTgt!=null?[{type:'line',label:'OT Target/day',data:labels.map(()=>perDayTgt),borderColor:'#f472b6',borderDash:[6,4],borderWidth:2,pointRadius:0}]:[]),
-  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
-    plugins:{legend:{position:'top'},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y,0)}`}}},
-    scales:{y:{beginAtZero:true,ticks:{callback:v=>fmt(v/1000,0)+'k'}},x:{ticks:{maxTicksLimit:15}}}}});
-}
+/* ---- Overtime section removed ---- */
 const MACHINE_OEE_TITLES = {
   accl:  { query:'machines=VRM-1,VRM-2',            label:'VRM-1 + VRM-2 (Vertical Roller Mill) — combined', empty:'No VRM data' },
   ail:   { query:'shopfloor=Re-Rolling Shop Floor', label:'Rolling (Re-Rolling Shop Floor) — combined', empty:'No Rolling data' },
@@ -573,6 +569,58 @@ async function loadMachineOee(){
         scales:{y:{min:0,max:110,ticks:{callback:v=>v+'%'}},x:{ticks:{maxTicksLimit:15}}}}});
   }catch(e){ panel.style.display='none'; }
 }
+/* ---------- OEE Machine Performance & Loss Summary (per machine) ---------- */
+/* ---------- Per-machine summary (shared by cards + summary table) ---------- */
+function machSummary(){
+  if(!(P.machAll&&P.machAll.length)) return [];
+  const nm=x=>+String(x==null?0:x);
+  const mk={};
+  (P.machAll||[]).filter(x=>inRange(x.d)).forEach(r=>{
+    const k=r.m; mk[k]=mk[k]||{m:r.m,u:r.u,cap:0,tgt:0,prod:0,good:0,waste:0,Av:0,Dur:0,Pln:0,smv:0,nptLoss:0,npt:0,bd:0};
+    const o=mk[k]; o.cap+=nm(r.cap);o.tgt+=nm(r.target);o.prod+=nm(r.actual);o.good+=nm(r.good);o.waste+=nm(r.waste);o.Av+=nm(r.Av);o.Dur+=nm(r.Dur);o.Pln+=nm(r.Pln);o.smv+=nm(r.smv);o.nptLoss+=nm(r.nptLoss);o.npt+=nm(r.npt);o.bd+=nm(r.bdCount);
+  });
+  return Object.values(mk).sort((a,b)=>a.m<b.m?-1:1).map(m=>{
+    const avail=(m.Dur-m.Pln)>0?(m.Av-m.npt)/(m.Dur-m.Pln):0;
+    const perf=m.Av>0?m.smv/m.Av:0;
+    const qual=m.prod>0?Math.min(m.good/m.prod,1):0;
+    const oee=(m.prod>0&&avail>0&&perf>0&&qual>0)?avail*perf*qual:0;
+    const cu=m.cap>0?m.prod/m.cap:null;
+    const nptPct=m.Av>0?m.nptLoss/m.Av:null;
+    const y=m.prod>0?m.good/m.prod:null;
+    return {m:m.m,u:m.u,oee,cu,nptPct,y,waste:m.waste,good:m.good,prod:m.prod,cap:m.cap,tgt:m.tgt};
+  });
+}
+function renderMachineOee(){
+  const panel=$('oeeSummaryPanel'); if(!panel) return;
+  if(!(P.machAll&&P.machAll.length)){ panel.style.display='none'; return; }
+  panel.style.display='';
+  const nm=x=>+String(x==null?0:x);
+  const f1=n=>n==null?'—':(n*100).toFixed(2)+'%';
+  const f0=n=>n==null?'—':n.toLocaleString('en-US',{maximumFractionDigits:2});
+  // group by machine over the range, sum fields
+  const mk={};
+  (P.machAll||[]).filter(x=>inRange(x.d)).forEach(r=>{
+    const k=r.m; mk[k]=mk[k]||{m:r.m,u:r.u,cap:0,tgt:0,prod:0,good:0,waste:0,wastTgt:0,Av:0,Dur:0,Pln:0,smv:0,nptLoss:0,bd:0,actRPM:0,stdRPM:0};
+    const o=mk[k]; o.cap+=nm(r.cap);o.tgt+=nm(r.target);o.prod+=nm(r.actual);o.good+=nm(r.good);o.waste+=nm(r.waste);o.wastTgt+=nm(r.wastTgt);o.Av+=nm(r.Av);o.Dur+=nm(r.Dur);o.Pln+=nm(r.Pln);o.smv+=nm(r.smv);o.nptLoss+=nm(r.nptLoss);o.bd+=nm(r.bdCount);o.actRPM+=nm(r.actRPM);o.stdRPM+=nm(r.stdRPM);
+  });
+  const arr=Object.values(mk).sort((a,b)=>a.m<b.m?-1:1);
+  const range=(FROM&&TO&&FROM!==TO)?(`${FROM} → ${TO}`):(FROM||P.meta.maxDate);
+  $('oeeSummaryTitle').textContent=(P.meta.name||PLANT)+' · '+range;
+  const row=m=>{
+    const ach=m.tgt>0?m.prod/m.tgt:null;
+    const cu=m.cap>0?m.prod/m.cap:null;
+    const y=m.prod>0?m.good/m.prod:null;
+    const wp=m.prod>0?(m.prod-m.good)/m.prod:null;
+    const avail=(m.Dur-m.Pln)>0?(m.Av-m.npt)/(m.Dur-m.Pln):0;
+    const perf=m.Av>0?m.smv/m.Av:0;
+    const qual=m.prod>0?Math.min(m.good/m.prod,1):0;
+    const oee=(m.prod>0&&avail>0&&perf>0&&qual>0)?avail*perf*qual:0;
+    const npt=m.Av>0?m.nptLoss/m.Av:null;
+    const mtbf=m.bd>0?(m.Dur/60)/m.bd:null, mttr=m.bd>0?(m.nptLoss/60)/m.bd:null;
+    return `<tr style="border-top:1px solid #233048"><td style="padding:5px 8px;font-weight:600">${m.m}</td><td style="text-align:right">${m.u}</td><td style="text-align:right">${f0(m.cap)}</td><td style="text-align:right">${f0(m.tgt)}</td><td style="text-align:right">${f0(m.prod)}</td><td style="text-align:right">${f1(ach)}</td><td style="text-align:right">${f1(cu)}</td><td style="text-align:right">${f0(m.good)}</td><td style="text-align:right">${f1(y)}</td><td style="text-align:right">${f0(m.wastTgt)}</td><td style="text-align:right">${f0(m.waste)}</td><td style="text-align:right">${f1(wp)}</td><td style="text-align:right"><b>${f1(oee)}</b></td><td style="text-align:right">${f1(npt)}</td><td style="text-align:right">${f0(m.stdRPM)}</td><td style="text-align:right">${f0(m.actRPM)}</td><td style="text-align:right">${f0((m.stdRPM||0)-(m.actRPM||0))}</td><td style="text-align:right">${f0(m.Pln)}</td><td style="text-align:right">${f0(m.nptLoss)}</td><td style="text-align:right">${mtbf!=null?f0(mtbf):'—'}</td><td style="text-align:right">${mttr!=null?f0(mttr):'—'}</td></tr>`;
+  };
+  $('oeeSummaryTable').innerHTML=`<thead><tr>${['MC','UOM','Capacity','Target','Production','Achieve %','Cap Util %','Good Qty','Yield %','Wastage TGT','Actual Wastage','Wastage %','OEE %','NPT %','TGT Speed','Actual Speed','Speed Gap','Planned DT','Unplanned DT','MTBF','MTTR'].map(h=>`<th style="padding:5px 8px;text-align:${h==='MC'?'left':'right'};color:#cdd7ea">${h}</th>`).join('')}</tr></thead><tbody>${arr.map(row).join('')}</tbody>`;
+}
 /* ---------- NPT% (correct formula) render + traceability ---------- */
 function renderNptPct(){
   const panel=$('nptPctPanel'); if(!panel) return;
@@ -610,14 +658,20 @@ function renderNptPct(){
     <span style="color:var(--mut)">Combined uses ${c.filtered?'the dashboard machine filter (●)':'all machines'}. Status flags: N.A. (available ≤ 0), "Loss > Available" (data error), No data.</span>`;
 }
 
-function applyFilters(){
+async function applyFilters(){
   const f=$('fromDate').value, t=$('toDate').value;
   if(!f||!t||f>t){ alert('Please pick a valid From/To date range.'); return; }
-  FROM=f; TO=t; render();
+  FROM=f; TO=t;
+  await refreshLive();   // re-fetch live data for the selected range so recent dates refresh
 }
 function resetFilters(){
-  $('yearSel').value='All Years'; $('fromDate').value=P.meta.minDate; $('toDate').value=P.meta.maxDate;
-  FROM=P.meta.minDate; TO=P.meta.maxDate; render();
+  const dhakaToday=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
+  const dflt = (dhakaToday <= P.meta.maxDate) ? dhakaToday : P.meta.maxDate;
+  const monthStart = dhakaToday.slice(0,7)+'-01';
+  const f = (monthStart <= dflt) ? monthStart : dflt;
+  $('yearSel').value='All Years'; $('fromDate').value=f; $('toDate').value=dflt;
+  FROM=f; TO=dflt;
+  refreshLive();
 }
 function setToday(){
   const t=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
@@ -700,6 +754,10 @@ function tonPref(arr, uKey){
 }
 
 /* ---------- render ---------- */
+function chartNoData(canvasId, msg){
+  const c=document.getElementById(canvasId); if(!c) return;
+  const box=c.parentElement; if(box) box.innerHTML='<div class="empty-msg">'+(msg||'No data available for this period')+'</div>';
+}
 function render(){
   Object.values(charts).forEach(c=>c&&c.destroy());
   for(const k in charts) delete charts[k];
@@ -714,8 +772,9 @@ function render(){
   const D = P.daily.filter(r=>inRange(r.d));
   const agg = plantOEE(D);
   const loadingTot = D.reduce((s,r)=>s+r.l,0);
-  // Corrected OEE (skill §10.2) — ALL machines (not machine-filtered): average per-day A/P/Q/OEE over the selected range
-  const haveV2 = (P.oeeV2All&&P.oeeV2All.length) ? P.oeeV2All.filter(r=>inRange(r.d)) : [];
+  // Corrected OEE (skill §10.2) — ACCL uses VRM-1+VRM-2 (oeeV2); other SBUs use all machines (oeeV2All)
+  const oeeSrc = (PLANT==='accl' && P.oeeV2 && P.oeeV2.length) ? P.oeeV2 : P.oeeV2All;
+  const haveV2 = (oeeSrc&&oeeSrc.length) ? oeeSrc.filter(r=>inRange(r.d)) : [];
   const correctedAgg = haveV2.length ? {
     A: haveV2.reduce((s,r)=>s+r.A,0)/haveV2.length,
     P: haveV2.reduce((s,r)=>s+r.P,0)/haveV2.length,
@@ -785,9 +844,17 @@ function render(){
   // Other Ton-SBUS (HRML/FAL/AEL/AAFL) show Ton only; native-unit SBUs show their units.
   const SHOW_BOTH = new Set(['accl']);
   const goodPref = SHOW_BOTH.has(PLANT) ? aStats.filter(x=>isTonUom(x.u)||/(bag|pices)/i.test(x.u)) : tonPref(aStats);
-  const goodVal = SHOW_BOTH.has(PLANT)
+  // ACCL KPI Actual Output formula: (VRM-1+VRM-2) Ton + (Packer + BulkLoader/20) Bag
+  let accGoodVal=null;
+  if(PLANT==='accl' && P.machAll && P.machAll.length){
+    const ra=(P.machAll||[]).filter(x=>inRange(x.d));
+    let vrm=0, packer=0, bulk=0;
+    ra.forEach(x=>{ if(/vrm/i.test(x.m)) vrm+=x.actual; else if(/packer/i.test(x.m)) packer+=x.actual; else if(/bulk/i.test(x.m)) bulk+=x.actual; });
+    accGoodVal = `${Math.round(vrm)} Ton · ${Math.round(packer + bulk/20)} Bag`;
+  }
+  const goodVal = accGoodVal || (SHOW_BOTH.has(PLANT)
     ? (goodPref.length ? goodPref.map(x=>`${fmt(x.a,0)} ${isTonUom(x.u)?'Ton':'Bag'}`).join(' · ') : '—')
-    : fmtOutput(goodPref);
+    : fmtOutput(goodPref));
   const tgtLine = (v,suffix)=> (v==null?'':`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${v}${suffix||''}</div>`);
   // Target Output from productionEntryOee (numShiftTargetQuantity) — sum over selected range, raw from db
   const tgtOutRows = ((P.tgtOut||[]).length ? (P.tgtOut||[]).filter(x=>inRange(x.d)).map(x=>({d:x.d, u:x.u, t:x.t})) : (srcRows.length ? srcRows : D.filter(x=>x.t!=null)));
@@ -825,17 +892,36 @@ function render(){
     return { v:`${val} ${unit}`, s:`${today} · ${tgtTxt}` };
   })();
 
+  // Per-machine summary aggregates (average OEE/Capacity/NPT/Yield, sum Waste/Good). ACCL: OEE/Capacity/Yield use VRM only.
+  const _ms=machSummary();
+  const _acclVRM=_ms.filter(x=>/vrm/i.test(x.m));
+  const _oeeSet=(PLANT==='accl'&&_acclVRM.length)?_acclVRM:_ms;
+  const _avg=(arr,key,incZero)=>{ const v=arr.map(x=>x[key]).filter(x=>x!=null||incZero); if(!v.length) return null; return v.reduce((s,x)=>s+(x==null?0:x),0)/v.length; };
+  const _oeeAvg=_oeeSet.length?(_oeeSet.reduce((s,x)=>s+(x.oee||0),0)/_oeeSet.length):null;
+  const _cuAvg=_avg(_oeeSet,'cu',false);
+  const _nptAvg=_avg(_ms,'nptPct',false);
+  const _yAvg=_avg(_oeeSet,'y',false);
+  const _wasteSum=_ms.reduce((s,x)=>s+(x.waste||0),0);
+  const _goodSum=_ms.reduce((s,x)=>s+(x.good||0),0);
+  // ACCL Good Production: (VRM good) Ton + (Packer good + Bulk good/20) Bag
+  let _goodVal=null;
+  if(PLANT==='accl'){
+    let vrm=0,packer=0,bulk=0;
+    _ms.forEach(x=>{ if(/vrm/i.test(x.m)) vrm+=x.good; else if(/packer/i.test(x.m)) packer+=x.good; else if(/bulk/i.test(x.m)) bulk+=x.good; });
+    _goodVal=`${Math.round(vrm)} Ton · ${Math.round(packer + bulk/20)} Bag`;
+  }
+
   const kpis = [
-    {l:'Production OEE', v:(useAgg.src==='corrected'? (useAgg.OEE!=null?useAgg.OEE.toFixed(1)+'%':'—') : pct(useAgg.OEE)), s:(useAgg.A==null?`Runtime capture starts ${P.meta.rtStart}`:(useAgg.src==='corrected'?`A ${useAgg.A.toFixed(0)}% · P ${useAgg.P.toFixed(0)}% · Q ${useAgg.Q.toFixed(0)}%`:`A ${pct(useAgg.A,0)} · P ${pct(useAgg.P,0)} · Q ${pct(useAgg.Q,0)}`))+(function(){const t=oeeTgt((TO||P.meta.maxDate).slice(0,7));return (t!=null)?`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">OEE Target ${t}%</div>`:'';}())+(useAgg.src==='corrected'?`<div style="margin-top:4px;color:var(--mut);font-size:10.5px">corrected OEE (Avail÷(Shift−Planned) × P × Q)</div>`:''), ac:'var(--teal)'},
-    {l:'Capacity Utilization', v:pct(agg.CU), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.cu,0)}`).join(' · '), ac:'var(--blue)'},
-    {l:'NPT (Non-Productive Time)', v:(function(){ const ni=P.nptInfo; if(ni&&ni.combined){ const c=ni.combined; return (c.npt!=null?c.npt.toFixed(1)+'%':'—'); } return pct(nptPct); })(), s:(function(){ const ni=P.nptInfo; if(ni&&ni.combined){ const c=ni.combined; return `${fmt(c.loss,0)} min loss ÷ ${fmt(c.avail,0)} min available (${fmt(c.shift,0)} − ${fmt(c.planned,0)} planned)`; } return `${fmt(nptMin/60,0)} hrs NPT vs ${fmt(loadingTot/60,0)} hrs loading`; })(), ac:'var(--red)'},
-    {l:'Yield', v:pct(agg.Q), s:uSt.slice(0,2).map(x=>`${x.u} ${pct(x.y,1)}`).join(' · ')+tgtLine(YIELD_TGT!=null?YIELD_TGT+'%':null), ac:'var(--green)'},
+    {l:'Production OEE', v:(_oeeAvg!=null?(_oeeAvg*100).toFixed(1)+'%':'—'), s:(PLANT==='accl'?'VRM-1 + VRM-2 average':'Average across all machines'), ac:'var(--teal)'},
+    {l:'Capacity Utilization', v:(_cuAvg!=null?(_cuAvg*100).toFixed(1)+'%':'—'), s:(PLANT==='accl'?'VRM-1 + VRM-2 average · Target 80%':'Average across all machines · Target 80%'), ac:'var(--blue)'},
+    {l:'NPT (Non-Productive Time)', v:(_nptAvg!=null?(_nptAvg*100).toFixed(1)+'%':'—'), s:'Average across all machines', ac:'var(--red)'},
+    {l:'Yield', v:(_yAvg!=null?(_yAvg*100).toFixed(1)+'%':'—'), s:(PLANT==='accl'?'VRM-1 + VRM-2 average':'Average across all machines')+tgtLine(YIELD_TGT!=null?YIELD_TGT+'%':null), ac:'var(--green)'},
     {l:'Planning Achievement', v:(pStat.avgPct!=null?fmt(pStat.avgPct,1)+'%':'—'), s:(pStat.n?`avg of ${pStat.n} product line(s) · ${pStat.totDiff>=0?'+':''}${fmt(pStat.totDiff,0)} (out − plan)`+(!pStat.corrected?` · unverified`:''): 'No plan variance data in range')+(pStat.n?`<div style="margin-top:5px;color:var(--pink);font-weight:700;font-size:11.5px">Target ${fmt(pStat.totPlan,0)} planned</div>`:''), ac:'var(--amber)'},
     {l:'Scheduled Maintenance', v:(function(){ const sm=P.schedMaint; return sm?`${fmt(sm.doneMTD,0)} / ${fmt(sm.monthly,0)}`:(fmt(smMin/60,0)+' h'); })(), s:(function(){ const sm=P.schedMaint; if(sm){ const asOf=(P.meta.maxDate||'').slice(0,10); const m=sm.month||'';
       return `${fmt(sm.monthly,0)} monthly target · ${fmt(sm.dueMTD,0)} due (${m}-01 → ${asOf||m})`; } return `${smEvt} planned events`; })(), ac:'var(--blue)'},
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},
-    {l:'Actual Output', v:goodVal, s:prodLine(), ac:'var(--teal)'},
-    {l:'Waste', v:(wasteVal.v||'—'), s:(wasteVal.s||''), ac:'var(--red)'},
+    {l:'Actual Output', v:(_goodVal!=null?_goodVal:fmt(_goodSum,0)), s:prodLine(), ac:'var(--teal)'},
+    {l:'Waste', v:(_wasteSum>0?fmt(_wasteSum,1):'—'), s:'Summed across all machines', ac:'var(--red)'},
   ];
   $('kpiGrid').innerHTML = kpis.map(k=>`<div class="kpi" style="--ac:${k.ac}"><div class="lbl">${k.l}</div><div class="val">${k.v}</div><div class="sub">${k.s||''}</div></div>`).join('');
 
@@ -864,44 +950,58 @@ function render(){
     {label:'Quality %',data:qS,borderColor:'#4ade80',tension:.35,borderWidth:1.5,pointRadius:0,borderDash:[4,3]},
   ];
   if(tgtS.some(v=>v!=null)) oeeDatasets.push({label:'OEE Target %',data:tgtS,borderColor:'#f472b6',backgroundColor:'rgba(244,114,182,.15)',fill:true,tension:0,borderWidth:2,pointRadius:2,borderDash:[8,4]});
+  if(!D.length){ chartNoData('chOee','No production data available for this period'); }
+  else {
   charts.oee=new Chart($('chOee'),{type:'line',data:{labels:bk,datasets:oeeDatasets},
     options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
     plugins:{legend:{position:'top',...legendOpt},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y?.toFixed(1)}%`}}},
     scales:{y:{min:0,max:105,...gridOpt,ticks:{...gridOpt.ticks,callback:v=>v+'%'}},x:gridOpt}}});
+  }
 
   /* ---- NPT donut ---- */
   const catEntries=Object.entries(nptCats).sort((a,b)=>b[1].m-a[1].m);
   const topCats=catEntries.slice(0,7); const restM=catEntries.slice(7).reduce((s,x)=>s+x[1].m,0);
   if(restM>0) topCats.push(['Others',...([{m:restM}])]);
   const npColors=['#2dd4bf','#38bdf8','#fbbf24','#f87171','#a78bfa','#f472b6','#4ade80','#64748b'];
+  if(!catEntries.length){ chartNoData('chNpt','No NPT loss data available for this period'); }
+  else {
   charts.npt=new Chart($('chNpt'),{type:'doughnut',data:{labels:topCats.map(x=>x[0]),
     datasets:[{data:topCats.map(x=>x[1].m),backgroundColor:npColors,borderColor:'#111a2e',borderWidth:2}]},
     options:{responsive:true,maintainAspectRatio:false,cutout:'58%',
       plugins:{legend:{position:'right',...legendOpt},tooltip:{callbacks:{label:c=>{
         const tot=c.dataset.data.reduce((a,b)=>a+b,0); return `${c.label}: ${fmt(c.parsed/60,0)} hrs (${pct(c.parsed/tot,1)})`;}}}}}});
+  }
 
   /* ---- Capacity & Yield ---- */
   const cuS=bk.map(b=>trend[b]?plantOEE(trend[b]).CU*100:null);
   const yS=bk.map(b=>trend[b]?plantOEE(trend[b]).Q*100:null);
+  if(!D.length){ chartNoData('chCap','No production data available for this period'); }
+  else {
   charts.cap=new Chart($('chCap'),{type:'line',data:{labels:bk,datasets:[
     {label:'Capacity Utilization %',data:cuS,borderColor:'#38bdf8',backgroundColor:'rgba(56,189,248,.12)',fill:true,tension:.35,borderWidth:2.5,pointRadius:2},
     {label:'Yield %',data:yS,borderColor:'#4ade80',tension:.35,borderWidth:2,pointRadius:0},
   ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
     plugins:{legend:{position:'top',...legendOpt},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y?.toFixed(1)}%`}}},
     scales:{y:{min:0,max:110,...gridOpt,ticks:{...gridOpt.ticks,callback:v=>v+'%'}},x:gridOpt}}});
+  }
 
   /* ---- Top 5 breakdowns ---- */
+  if(!top5.length){ chartNoData('chBd','No breakdown data available for this period'); }
+  else {
   charts.bd=new Chart($('chBd'),{type:'bar',data:{labels:top5.map(x=>x[0]),
     datasets:[{label:'Downtime (hrs)',data:top5.map(x=>x[1].m/60),backgroundColor:'#f87171',borderRadius:6,barThickness:18}]},
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${fmt(c.parsed.x,0)} hrs · ${top5[c.dataIndex][1].e} events`}}},
       scales:{x:{...gridOpt,ticks:{...gridOpt.ticks,callback:v=>fmt(v,0)+' h'}},y:{...noGrid,ticks:{autoSkip:false,font:{size:10.5}}}}}});
+  }
 
   /* ---- Plan vs Actual ---- */
   const pMonths=monthList();
   const planData=pMonths.map(k=>planM[k]||null);
   const actData=pMonths.map(k=>goodM[k]||null);
   const achData=pMonths.map(k=>(planM[k]&&goodM[k])?goodM[k]/planM[k]*100:null);
+  if(!pMonths.some(k=>planM[k]!=null||goodM[k]!=null)){ chartNoData('chPlan','No plan vs actual data available for this period'); }
+  else {
   charts.plan=new Chart($('chPlan'),{data:{labels:pMonths,datasets:[
     {type:'bar',label:`Plan (${domUom||'qty'})`,data:planData,backgroundColor:'rgba(251,191,36,.55)',borderRadius:5},
     {type:'bar',label:`Actual (${domUom||'qty'})`,data:actData,backgroundColor:'rgba(45,212,191,.75)',borderRadius:5},
@@ -909,29 +1009,26 @@ function render(){
   ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
     plugins:{legend:{position:'top',...legendOpt},tooltip:{callbacks:{label:c=>c.dataset.label.includes('%')?`Achievement: ${c.parsed.y?.toFixed(1)}%`:`${c.dataset.label}: ${fmt(c.parsed.y,0)}`}}},
     scales:{y:{...gridOpt,ticks:{...gridOpt.ticks,callback:v=>fmt(v/1e6,1)+'M'}},y1:{position:'right',min:0,max:150,grid:{drawOnChartArea:false},ticks:{callback:v=>v+'%'}},x:gridOpt}}});
-
-  /* ---- RCA donut ---- */
-  const st={}; P.rca.forEach(r=>{ const s=r.s||'Open'; st[s]=(st[s]||0)+1; });
-  const stColors={Completed:'#4ade80',Running:'#fbbf24',Pending:'#f87171',Open:'#64748b'};
-  charts.rca=new Chart($('chRca'),{type:'doughnut',data:{labels:Object.keys(st),
-    datasets:[{data:Object.values(st),backgroundColor:Object.keys(st).map(k=>stColors[k]||'#64748b'),borderColor:'#111a2e',borderWidth:2}]},
-    options:{responsive:true,maintainAspectRatio:false,cutout:'58%',
-      plugins:{legend:{position:'right',...legendOpt},tooltip:{callbacks:{label:c=>`${c.label}: ${c.parsed} actions`}}}}});
-
+  }
 
   /* ---- Scheduled maintenance (preventive schedule: due vs done per day) ---- */
-  const smd=(P.schedMaint&&P.schedMaint.daily)||[];
+  const smd=((P.schedMaint&&P.schedMaint.daily)||[]).filter(x=>inRange(x.d));
   const smLabels=smd.map(x=>x.d.slice(8)+''+x.d.slice(5,7)); /// day-Month
+  if(!smd.length){ chartNoData('chSm','No scheduled maintenance data available for this period'); }
+  else {
   charts.sm=new Chart($('chSm'),{data:{labels:smLabels,datasets:[
     {type:'bar',label:'Due',data:smd.map(x=>x.due),backgroundColor:'rgba(56,189,248,.55)',borderRadius:5},
     {type:'bar',label:'Done',data:smd.map(x=>x.done),backgroundColor:'rgba(45,212,191,.8)',borderRadius:5},
   ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
     plugins:{legend:{position:'top',...legendOpt},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${fmt(c.parsed.y,0)} jobs`}}},
     scales:{y:{...gridOpt,beginAtZero:true},x:gridOpt}}});
+  }
 
   /* ---- MOH ---- */
   const mohBk={}; mohRows.forEach(m=>{mohBk[m.k]={c:m.c,mat:m.mat,q:m.q,gross:m.gross,pool:m.pool};});
   const mohMonths=pMonths.filter(k=>mohBk[k]);
+  if(!mohMonths.length){ chartNoData('chMoh','No MOH data available for this period'); }
+  else {
   charts.moh=new Chart($('chMoh'),{data:{labels:mohMonths,datasets:[
     {type:'bar',label:'MOH Cost Net (৳ M)',data:mohMonths.map(k=>mohBk[k].c/1e6),backgroundColor:'rgba(74,222,128,.65)',borderRadius:6},
     {type:'line',label:'Material Cost (৳ M)',data:mohMonths.map(k=>mohBk[k].mat?mohBk[k].mat/1e6:null),borderColor:'#fbbf24',tension:.3,borderWidth:2,pointRadius:2},
@@ -939,6 +1036,7 @@ function render(){
   ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
     plugins:{legend:{position:'top',...legendOpt},tooltip:{callbacks:{label:c=>c.dataset.label.includes('1k')?`MOH/1k ${domUom||'units'}: ৳${fmt(c.parsed.y,0)}`:`${c.dataset.label}: ৳${fmt(c.parsed.y,2)} M`}}},
     scales:{y:{...gridOpt,ticks:{...gridOpt.ticks,callback:v=>'৳'+v+'M'}},y1:{position:'right',grid:{drawOnChartArea:false},ticks:{callback:v=>'৳'+fmt(v,0)}},x:gridOpt}}});
+  }
   // MOH element breakdown (Finance sub-schedule) if present on the latest month
   (function(){
     const mn=$('mohNote'), bd=$('mohBreakdown');
@@ -959,7 +1057,8 @@ function render(){
 
   /* ---- MOH Budget vs Today ---- */
   (function(){
-    const today = P.meta.maxDate;
+    const maxAvail = P.meta.maxDate || '';
+    const today = ((TO||'') && (TO||'') < maxAvail) ? (TO||'') : maxAvail;
     const curM = today.slice(0,7);
     const [cy,cm]=curM.split('-').map(Number);
     const dim = new Date(cy, cm, 0).getDate();
@@ -968,6 +1067,14 @@ function render(){
     const monthlyBudget = budgetRow? budgetRow.b : null;
     const dailyBudget = monthlyBudget!=null ? monthlyBudget/dim : null;
     const dailyMap = {}; (P.mohDaily||[]).forEach(r=>dailyMap[r.d]=r.c);
+    const hasMohData = !!(monthlyBudget!=null || Object.keys(dailyMap).length);
+    if(!hasMohData){
+      $('mohBudgetKpi').innerHTML = '<div class="empty-msg" style="grid-column:1/-1">No MOH budget/actual data available</div>';
+      $('mohBudgetSrc').textContent = 'No MOH budget or daily actual data';
+      $('mohBudgetNote').innerHTML = '';
+      chartNoData('chMohBudget','No MOH budget vs actual data available');
+      return;
+    }
     const todayActual = dailyMap[today]||0;
     const mtdActual = (P.mohDaily||[]).filter(r=>r.d.slice(0,7)===curM && r.d<=today).reduce((s,r)=>s+r.c,0);
     const mtdBudget = dailyBudget!=null ? dailyBudget*dayNum : null;
@@ -1008,14 +1115,6 @@ function render(){
     }
   })();
 
-  /* ---- RCA table ---- */
-  const tb=$('rcaTable').querySelector('tbody');
-  tb.innerHTML = P.rca.length? P.rca.map((r,i)=>{
-    const badge = r.s==='Completed'?'b-green':(r.s==='Running'?'b-amber':(r.s==='Pending'?'b-red':'b-gray'));
-    return `<tr><td>${i+1}</td><td>${r.cause||'—'}</td><td>${r.why||'—'}</td><td>${r.act||'—'}</td>
-      <td><span class="badge ${badge}">${r.s||'Open'}</span></td><td>${r.sch||'—'}</td><td>${r.done||'—'}</td></tr>`;
-  }).join('') : '<tr><td colspan="7" class="empty-msg">No RCA records in this period</td></tr>';
-
   /* ---- footer ---- */
   $('foot').innerHTML = `<b>KPI definitions —</b> Availability = Machine Runtime ÷ Loading Time · Performance = Actual Output ÷ (Rated Capacity/hr × Runtime) · Quality/Yield = Good ÷ Actual Output · OEE = A×P×Q ·
   Capacity Utilization = Actual ÷ (Rated Capacity/hr × Shift Duration) · NPT% = Loss Time ÷ (Shift Time − Planned Time) · Planning Achievement = Average of product-line progress (output ÷ planned) ·
@@ -1024,6 +1123,35 @@ function render(){
   <br><b>Data sources —</b> mes.tblNPTHeader + mes.tblNPTRow (loss time) · mes.tblOeeProdWasteHeader (shift / planned / available time) · mes.tblProductionPlanVarianceIssue (planning) · Plant: <b>${P.meta.name}</b>, extracted ${DATA.generated}.
   MOH is recorded at company (business-unit) level — for multi-plant companies (ARMCL, Akij Essentials) these figures span all their plants.`;
   renderNptPct();
+  renderMachineOee();
+  renderKpiBlocks();
+}
+
+/* ---------- 3 traceable KPI blocks (Plan Variance / MOH / Scheduled Maintenance) ---------- */
+function k3(label, value, sub, trace){
+  return `<div class="k" title="${String(trace||sub||'').replace(/"/g,'&quot;')}"><div class="lbl">${label}</div><div class="val">${value}</div><div class="sub">${sub||''}</div><div class="tr">${trace||''}</div></div>`;
+}
+function renderKpiBlocks(){
+  const elPv=$('kpiPv'), elMoh=$('kpiMoh'), elMaint=$('kpiMaint');
+  if(!elPv||!elMoh||!elMaint) return;
+  const K=(P&&P.kpis)||{};
+  // KPI 1 — Production Plan Variance
+  const pv=K.planVariance||{};
+  elPv.innerHTML = (pv.error || !pv.planCount)
+    ? `<div class="k"><div class="lbl">Plan Variance</div><div class="val">No data</div><div class="sub">No plan lines for this period</div><div class="tr">${pv.source||'mes.tblProductionPlanning'}</div></div>`
+    : k3('Avg Overall Progress', pv.avgProgress!=null?pv.avgProgress+'%':'—', `AVG(actual ÷ planned) · ${pv.planCount} plan line(s)`, pv.source)
+      + k3('Target Set', fmt(pv.targetSet||0,0), 'SUM(intPlannedQty) in period', 'mes.tblProductionPlanning.intPlannedQty');
+  // KPI 2 — MOH
+  const moh=K.moh||{};
+  elMoh.innerHTML = (moh.error || (moh.net==null))
+    ? `<div class="k"><div class="lbl">MOH</div><div class="val">No data</div><div class="sub">No GL 4010001 bookings</div><div class="tr">${moh.source||'fin.tblAccountingJournal'}</div></div>`
+    : k3('Net MOH (period)', '৳'+fmt(moh.net/1000000,2)+' M', `GL 4010001 · ${(moh.byDay||[]).length} day(s)`, moh.source)
+      + k3('MTD MOH', '৳'+fmt(moh.mtd/1000000,2)+' M', 'SUM(numAmount) month-to-date of '+((TO||'').slice(0,7)), 'fin.tblAccountingJournal.numAmount');
+  // KPI 3 — Scheduled Maintenance (done / total, no %)
+  const mt=K.maintenance||{};
+  elMaint.innerHTML = (mt.error || (!mt.total && !mt.done))
+    ? `<div class="k"><div class="lbl">Scheduled Maintenance</div><div class="val">0 / 0</div><div class="sub">No preventive maintenance due</div><div class="tr">${mt.source||'ast.tblAssetMaintenanceHeader'}</div></div>`
+    : k3('Done / Total', mt.value||(mt.done+' / '+mt.total), 'scheduled PM due in period', mt.source);
 }
 
 document.addEventListener('DOMContentLoaded', init);
@@ -1059,7 +1187,7 @@ function loadAlertEmails(){
 function renderAlertTable(){
   const tb=$('alertEmailTable').querySelector('tbody'); if(!tb) return;
   tb.innerHTML='';
-  const order=['accl','apfil','ail','aafl','aelflour','aeldal','hrml','fal','absl','armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','alel'];
+  const order=['accl','apfil','ail','aafl','aelflour','aelmohadevpur','aeldal','hrml','fal','absl','armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz'];
   for(const k of order){
     const c=(alertCfg&&alertCfg[k])||{};
     const ph=(c.plant_head||[]).join(', ')||'—';
@@ -1082,7 +1210,7 @@ function saveAlertEmails(){
   if(!alertCfg){ alertStatus('No config','err'); return; }
   const cfg=JSON.parse(JSON.stringify(alertCfg));
   const split=s=>String(s).split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
-  const order=['accl','apfil','ail','aafl','aelflour','aeldal','hrml','fal','absl','armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','alel'];
+  const order=['accl','apfil','ail','aafl','aelflour','aelmohadevpur','aeldal','hrml','fal','absl','armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz'];
   for(const k of order){ const e=$('ph_'+k)||$('hc_'+k)||$('dep_'+k); if(!e) continue; cfg[k]=cfg[k]||{}; if($('ph_'+k)) cfg[k].plant_head=split($('ph_'+k).value); if($('hc_'+k)) cfg[k].hob_ceo=split($('hc_'+k).value); cfg._deputy = $('dep_'+k)?$('dep_'+k).value.trim():cfg._deputy; }
   fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})}).then(r=>r.json()).then(d=>{
     alertCfg=d.config||cfg; alertEditOn=false; renderAlertTable(); alertStatus('Saved ✔','ok');

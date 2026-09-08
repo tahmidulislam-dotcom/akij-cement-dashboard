@@ -84,6 +84,66 @@ async function ibosQuery(sqlQuery, limit, key){
   return parseMarksTable(txt);
 }
 
+/* ---------- 3 KPI blocks (Plan Variance / MOH / Scheduled Maintenance) — resolved per SBU+Plant+date ---------- */
+// Plant key -> { intBusinessUnitId, intPlantId }  (wms.tblPlant + dco.tblBusinessUnit resolution)
+const KPI_PLANT_MAP = {
+  accl:{bu:4,pid:79}, apfil:{bu:8,pid:12}, aafl:{bu:232,pid:148},
+  aelflour:{bu:144,pid:149}, aelmohadevpur:{bu:144,pid:147}, aeldal:{bu:144,pid:151},
+  ail:{bu:224,pid:136}, absl:{bu:220,pid:135},
+  'armcl-ngnj':{bu:175,pid:80},'armcl-dhour':{bu:175,pid:81},'armcl-rup':{bu:175,pid:138},'armcl-ctg':{bu:175,pid:150},'armcl-gaz':{bu:175,pid:139},
+  hrml:{bu:188,pid:113}, fal:{bu:189,pid:114}, alel:{bu:237,pid:169},
+};
+async function computeKpis(key, from, to){
+  const cfg = KPI_PLANT_MAP[key] || {bu:0,pid:0};
+  const bu=cfg.bu, pid=cfg.pid; const nv=v=>+String(v==null?0:v).replace(/,/g,'');
+  const out={ key, bu, plantId:pid, planVariance:null, moh:null, maintenance:null };
+  const range=(from&&to)?from+'→'+to:(from||to||'—');
+  // ---- KPI 1: Production Plan Variance (avg progress + target set), plan-window overlap ----
+  try{
+    const rows = await ibosQuery(
+      `SELECT p.StrProductionPlanCode code, p.IntPlannedQty planned,
+        ISNULL((SELECT SUM(pr.numQuantity) FROM mes.tblProductionRow pr WITH (NOLOCK) JOIN mes.tblProductionHeader h WITH (NOLOCK) ON h.IntProductionId=pr.IntProductionId AND h.IntItemId=pr.IntItemId AND h.IsActive=1 JOIN mes.tblProductionOrder po WITH (NOLOCK) ON po.IntProductionOrderId=pr.IntProductionOrderId AND po.IntItemId=h.IntItemId AND po.StrProductionPlanCode=p.StrProductionPlanCode WHERE h.IntPlantId=p.IntPlantId AND h.IntShopFloorId=p.IntShopFloorId AND pr.isActive=1 AND h.dteProductionDate BETWEEN p.DtePlanFromDate AND p.DtePlanToDate),0) outq,
+        p.intOverAllProgress progPlan, CONVERT(varchar(10),p.DtePlanFromDate,120) pf, CONVERT(varchar(10),p.DtePlanToDate,120) pt, p.IsApproved appr
+        FROM mes.tblProductionPlanning p WITH (NOLOCK)
+        WHERE p.intBusinessUnitId=${bu} AND p.IsActive=1 AND p.DtePlanFromDate >= '${from}' AND p.DtePlanToDate <= '${to}'` + (pid?` AND p.intPlantId=${pid}`:'') , 200);
+    const lines=rows.map(r=>{ const planned=nv(r.planned), outq=nv(r.outq);
+      return { code:r.code, product:'', machine:'', planned, outq, diff:+(outq-planned).toFixed(2), prog: planned>0?+(outq/planned*100).toFixed(2):null, progPlan:nv(r.progPlan), from:r.pf, to:r.pt, approved:r.appr }; });
+    const targetSet = lines.reduce((s,l)=>s+l.planned,0);
+    const progs = lines.filter(l=>l.prog!=null).map(l=>l.prog);
+    const avgProgress = progs.length?+(progs.reduce((s,x)=>s+x,0)/progs.length).toFixed(1):null;
+    out.planVariance = { key, range, targetSet, avgProgress, planCount:lines.length, lines,
+      formula:'Target Set = SUM(intPlannedQty) · Avg Overall Progress = AVG(actual output ÷ planned)',
+      source:'mes.tblProductionPlanning(intPlannedQty, intOverAllProgress, dtePlanFromDate, dtePlanToDate, intPlantId, isActive) + mes.tblProductionRow.numQuantity (actual output)' };
+  }catch(e){ out.planVariance={ key, range, error:e.message, formula:'Target Set = SUM(intPlannedQty) · Avg Overall Progress = AVG(actual output ÷ planned)', source:'mes.tblProductionPlanning' }; }
+  // ---- KPI 2: MOH (Manufacturing Overhead Cost), GL 4010001 ----
+  try{
+    const rows = await ibosQuery(
+      `SELECT CONVERT(varchar(10),dteTransactionDate,23) d, SUM(ISNULL(numAmount,0)) amt, COUNT(*) n
+       FROM fin.tblAccountingJournal WHERE intBusinessUnitId=${bu} AND strGeneralLedgerCode='4010001' AND dteTransactionDate >= '${from}' AND dteTransactionDate <= '${to}'
+       GROUP BY CONVERT(varchar(10),dteTransactionDate,23) ORDER BY d`, 200);
+    const byDay=rows.map(r=>({d:r.d, amt:+nv(r.amt).toFixed(2), n:nv(r.n)}));
+    const net = byDay.reduce((s,x)=>s+x.amt,0);
+    const mtdKey=(to||'').slice(0,7);
+    const mtd = byDay.filter(x=>x.d.startsWith(mtdKey)).reduce((s,x)=>s+x.amt,0);
+    out.moh = { key, range, net:+net.toFixed(2), mtd:+mtd.toFixed(2), byDay,
+      formula:'Net MOH = SUM(numAmount) for GL 4010001 (production-received entries are negative; report net)',
+      source:'fin.tblAccountingJournal(strGeneralLedgerCode=4010001 Manufacturing Expenses, numAmount, dteTransactionDate, strNarration)' };
+  }catch(e){ out.moh={ key, range, error:e.message, formula:'Net MOH = SUM(numAmount) for GL 4010001', source:'fin.tblAccountingJournal' }; }
+  // ---- KPI 3: Scheduled Maintenance done / total (NO percentage) ----
+  try{
+    const rows = await ibosQuery(
+      `SELECT CONVERT(varchar(10),dteDueMaintenanceDate,23) d, SUM(CASE WHEN isComplete=1 THEN 1 ELSE 0 END) done, COUNT(*) total
+       FROM ast.tblAssetMaintenanceHeader WHERE intBusinessUnitId=${bu} AND isPreventive=1 AND dteDueMaintenanceDate >= '${from}' AND dteDueMaintenanceDate <= '${to}'` + (pid?` AND intPlantId=${pid}`:'') + `
+       GROUP BY CONVERT(varchar(10),dteDueMaintenanceDate,23) ORDER BY d`, 200, ASSET_KEY);
+    const byDue=rows.map(r=>({d:r.d, done:nv(r.done), total:nv(r.total)}));
+    const done = byDue.reduce((s,x)=>s+x.done,0); const total = byDue.reduce((s,x)=>s+x.total,0);
+    out.maintenance = { key, range, done, total, byDue, value:done+' / '+total,
+      formula:'done / total = COUNT(isComplete=1) ÷ COUNT(isPreventive=1) due in period',
+      source:'ast.tblAssetMaintenanceHeader(isComplete, isPreventive, dteDueMaintenanceDate, intPlantId, strWarehouseName)' };
+  }catch(e){ out.maintenance={ key, range, error:e.message, value:'0 / 0', formula:'done / total = COUNT(isComplete=1) ÷ COUNT(isPreventive=1)', source:'ast.tblAssetMaintenanceHeader' }; }
+  return out;
+}
+
 /* ---------- Gmail OAuth (stored workspace-mcp token — handles both expiry formats) ---------- */
 let accessToken = null, tokenExp = 0;
 async function getAccessToken() {
@@ -210,7 +270,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST', 'Access-Control-Allow-Headers': 'Content-Type' }); return res.end(); }
     if (url.pathname === '/' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0', 'Pragma': 'no-cache', 'Expires': '0' });
       return fs.createReadStream(DASH).pipe(res);
     }
     if (url.pathname === '/api/emails' && req.method === 'GET') return json(res, 200, { emails: loadCfg().emails || [] });
@@ -266,6 +326,15 @@ const server = http.createServer(async (req, res) => {
       cfg.alertsEnabled = !!b.enabled;
       saveAlertCfg(cfg);
       return json(res, 200, { ok: true, alertsEnabled: cfg.alertsEnabled });
+    }
+    if (url.pathname === '/api/daily-report' && req.method === 'POST') {
+      try {
+        const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
+        const live = r.ok ? (await r.json()) : { plants:{} };
+        const cfg = loadAlertCfg();
+        const out = await alertEngine.sendDailyReport(live, cfg, async (to, subject, htmlBody) => { return await sendEmail(to, subject, htmlBody); });
+        return json(res, 200, out);
+      } catch (e) { return json(res, 500, { error: e.message }); }
     }
     if (url.pathname === '/api/alert-test' && req.method === 'POST') {
       try {
@@ -346,6 +415,7 @@ const server = http.createServer(async (req, res) => {
       const reqDate = url.searchParams.get('date');   // single-date filter (deprecated; use from/to)
       const reqFrom = url.searchParams.get('from');   // NPT date range (global filter for all SBUs)
       const reqTo = url.searchParams.get('to');
+      const focus = url.searchParams.get('focus');    // only compute heavy per-SBU injectors for this plant
       let live;
       try{
         const html=fs.readFileSync(DASH,'utf8');
@@ -354,8 +424,33 @@ const server = http.createServer(async (req, res) => {
         live=JSON.parse(m[1]);
       }catch(e){ return json(res,500,{error:e.message}); }
       const PLANTS_LIVE=[
-        {key:'accl', bu:4, plants:['ACCL Narayanganj']},{key:'apfil', bu:8, plants:['Narayangonj Plant']},{key:'aafl', bu:232, plants:['AAFML Narayangonj Factory']},{key:'aelflour', bu:144, plants:['AEL Flour Narayanganj','AEL Mohadevpur']},{key:'aeldal', bu:144, plants:['AEL Dal Narayanganj']},{key:'ail', bu:224, plants:['Akij Ispat Munshiganj']},{key:'absl', bu:220, plants:['ABSL Ashuliya']},{key:'armcl-ngnj', bu:175, plants:['ARMCL Narayanganj Plant']},{key:'armcl-dhour', bu:175, plants:['ARMCL Dhour Plant']},{key:'armcl-rup', bu:175, plants:['ARMCL Rupgonj Plant']},{key:'armcl-ctg', bu:175, plants:['ARMCL Chittagong Plant']},{key:'armcl-gaz', bu:175, plants:['ARMCL Gazipur Plant']},{key:'hrml', bu:188, plants:['Hashem Rice Mills']},{key:'fal', bu:189, plants:['Fariq Agro Ltd.']},{key:'alel', bu:237, plants:[]},
+        {key:'accl', bu:4, plants:['ACCL Narayanganj']},{key:'apfil', bu:8, plants:['Narayangonj Plant']},{key:'aafl', bu:232, plants:['AAFML Narayangonj Factory']},{key:'aelflour', bu:144, plants:['AEL Flour Narayanganj']},{key:'aelmohadevpur', bu:144, plants:['AEL Mohadevpur']},{key:'aeldal', bu:144, plants:['AEL Dal Narayanganj']},{key:'ail', bu:224, plants:['Akij Ispat Munshiganj']},{key:'absl', bu:220, plants:['ABSL Ashuliya']},{key:'armcl-ngnj', bu:175, plants:['ARMCL Narayanganj Plant']},{key:'armcl-dhour', bu:175, plants:['ARMCL Dhour Plant']},{key:'armcl-rup', bu:175, plants:['ARMCL Rupgonj Plant']},{key:'armcl-ctg', bu:175, plants:['ARMCL Chittagong Plant']},{key:'armcl-gaz', bu:175, plants:['ARMCL Gazipur Plant']},{key:'hrml', bu:188, plants:['Hashem Rice Mills']},{key:'fal', bu:189, plants:['Fariq Agro Ltd.']},{key:'alel', bu:237, plants:[]},
       ];
+      const PLANT_NAMES_LIVE = {
+        accl:'Akij Cement Company Ltd. (ACCL)', apfil:'Akij Poly Fibre Industries Ltd.', aafl:'Akij Agro Feed Ltd.',
+        aelflour:'Akij Essentials Ltd. - Flour Mills', aelmohadevpur:'Akij Essentials Ltd. - Mohadevpur',
+        aeldal:'Akij Essentials Ltd. - Daal Mills', ail:'Akij Ispat Limited', absl:'Akij Building Solutions Limited',
+        'armcl-ngnj':'ARMCL Narayanganj','armcl-dhour':'ARMCL Dhour','armcl-rup':'ARMCL Rupganj','armcl-ctg':'ARMCL Chittagong','armcl-gaz':'ARMCL Gazipur',
+        hrml:'Hashem Rice Mills Ltd.', fal:'Fariq Agro Ltd. - Rice Mills', alel:'Akij Light Engineering Limited',
+      };
+      // Auto-create any newly-added plant in the embedded snapshot so its live data merges in,
+      // and keep every plant's meta.plants/bu in sync with the config.
+      for(const P of PLANTS_LIVE){
+        if(!live.plants[P.key]){
+          live.plants[P.key] = { meta:{ name: PLANT_NAMES_LIVE[P.key]||P.key, bu:P.bu, plants:P.plants, machines:'', minDate:'2000-01-01', maxDate:'2000-01-01', years:[], rtStart:null }, daily:[], nptCat:[], nptBd:[], ot:[], plan:[], moh:[], mohDaily:[], mohBudget:[], machDaily:[], machAll:[], waste:[], planVar:[], tgtOut:[], rca:[] };
+        } else {
+          if(!live.plants[P.key].meta) live.plants[P.key].meta = {};
+          live.plants[P.key].meta.bu = P.bu;
+          live.plants[P.key].meta.plants = P.plants;
+          if(!live.plants[P.key].meta.name) live.plants[P.key].meta.name = PLANT_NAMES_LIVE[P.key]||P.key;
+        }
+        if(!live.order.includes(P.key)) live.order.push(P.key);
+        if(!live.names[P.key]) live.names[P.key] = PLANT_NAMES_LIVE[P.key]||P.key;
+      }
+      // Plant-name filter helper (handler scope — used by merge + machine summaries)
+      const pfEsc=s=>s.replace(/'/g,"''");
+      const pfNorm=alias=>`LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(${alias}, CHAR(9), ''), CHAR(10), ''), CHAR(13), '')))`;
+      const pfIn=(p,alias)=> p.plants.length ? `${pfNorm(alias||'strPlantName')} IN (${p.plants.map(x=>`'${pfEsc(x)}'`).join(',')})` : '1=0';
       // MOH Actual — connected live to Finance sub-schedule (fin.tblAccountingJournal, GL 4010001 Manufacturing Expenses, per Profit Center, deduped)
       const MOH_PCTER_MAP = {
         accl:        { bu:4,   pcs:['Akij Cement Company Ltd.'],                                   name:'Akij Cement Company Ltd.' },
@@ -369,6 +464,7 @@ const server = http.createServer(async (req, res) => {
         'absl':       { bu:220, pcs:['Akij Building Solutions Limited'],                           name:'Akij Building Solutions Limited' },
         'alel':       { bu:237, pcs:['Akij Light Engineering Limited'],                            name:'Akij Light Engineering Limited' },
         'aelflour':   { bu:144, pcs:['Flour (Bulk)','Flour (Consumer)','Lentil (Bulk Manufacture)','Checkpeas (Bulk Manufacture)','Yellow Peas (bulk manufacture)','Lentil (consumer)','Oil (Consumer)'], name:'AEL' },
+        'aelmohadevpur': { bu:144, pcs:['Flour (Bulk)','Flour (Consumer)'], name:'AEL Mohadevpur' },
         'aeldal':     { bu:144, pcs:[], name:'AEL Daal' },
         'hrml':       { bu:188, pcs:['Rice (Manufacturing Bulk)','Rice (Manufacturing Consumer)','Rice (Manufacturing Export)','Rice (Tender & Others)','Tender (Navy)'], name:'HMRL' },
         'fal':        { bu:189, pcs:['Rice (Manufacturing)'],                                       name:'FAL' },
@@ -379,7 +475,7 @@ const server = http.createServer(async (req, res) => {
         // Dedupe by using ONLY Income Statement rows in the FS view (each txn is duplicated as Cashflow Statement).
         const to='2026-08-31', from='2026-08-01';
         for(const [key, cfg] of Object.entries(MOH_PCTER_MAP)){
-          const t=live.plants?.[key]; if(!t) continue;
+          const t=live.plants?.[key]; if(!t) continue; if(focus && key!==focus) continue;
           t.moh=t.moh||[];
           let row=t.moh.find(x=>x.k==='2026-08');
           try{
@@ -442,6 +538,7 @@ const server = http.createServer(async (req, res) => {
           const normU=n=>String(n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
           for(const P of PLANTS_LIVE){
             const target=live.plants?.[P.key]; if(!target) continue;
+            if(focus && P.key!==focus) continue;
             const uCount={};(target.daily||[]).forEach(d=>{const k=normU(d.u); uCount[k]=(uCount[k]||0)+d.g;});
             const dom=Object.entries(uCount).sort((a,b)=>b[1]-a[1]).slice(0,3).map(x=>x[0]);
             if(!dom.length) continue;
@@ -476,7 +573,7 @@ const server = http.createServer(async (req, res) => {
             const norm=alias=>`LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(${alias}, CHAR(9), ''), CHAR(10), ''), CHAR(13), '')))`;
             const plantIn=(p,alias)=> p.plants.length ? `${norm(alias||'strPlantName')} IN (${p.plants.map(x=>`'${esc(x)}'`).join(',')})` : '1=0';
             for(const P of PLANTS_LIVE){
-              const target=live.plants?.[P.key]; if(!target) continue;
+              const target=live.plants?.[P.key]; if(!target) continue; if(focus && P.key!==focus) continue;
               // per-plant snapshot max so we only fetch truly-new dates
               const snapMax=target.meta?.maxDate || '0000-00-00';
               // helper: latest date present in a list (defaults to snapMax)
@@ -545,7 +642,7 @@ const server = http.createServer(async (req, res) => {
           // Uses iBOSDD via ARL MCP (this table does not exist in the DWH DB)
           try{
             for(const P of PLANTS_LIVE){
-              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              const tgt=live.plants?.[P.key]; if(!tgt) continue; if(focus && P.key!==focus) continue;
               try{
                 const pvRows=await ibosQuery(`SELECT CONVERT(varchar(10), dteServerDateTime, 23) d, LTRIM(RTRIM(ISNULL(strItemName,'Others'))) item, SUM(ISNULL(plannedQty,0)) planned, SUM(ISNULL(outputQty,0)) output, SUM(ISNULL(difference,0)) diff, COUNT(*) n FROM mes.tblProductionPlanVarianceIssue WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND CONVERT(varchar(10), dteServerDateTime,23)>=CONVERT(varchar(10),DATEADD(day,-62,GETDATE()),23) GROUP BY CONVERT(varchar(10), dteServerDateTime, 23), LTRIM(RTRIM(ISNULL(strItemName,'Others'))) ORDER BY CONVERT(varchar(10), dteServerDateTime, 23) DESC`);
                 const nv=v=>+String(v==null?0:v).replace(/,/g,'');
@@ -568,7 +665,7 @@ const server = http.createServer(async (req, res) => {
             const sbMap={}; mRows.forEach(r=>{ sbMap[nv(r.bu)]={monthly:nv(r.monthly), dueMTD:nv(r.dueMTD), doneMTD:nv(r.doneMTD)}; });
             const dailyByBu={}; mDailyRows.forEach(r=>{ const bu=nv(r.bu); dailyByBu[bu]=dailyByBu[bu]||{}; dailyByBu[bu][r.d]={due:nv(r.due),done:nv(r.done)}; });
             for(const P of PLANTS_LIVE){
-              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              const tgt=live.plants?.[P.key]; if(!tgt) continue; if(focus && P.key!==focus) continue;
               const st=sbMap[P.bu]||{monthly:0,dueMTD:0,doneMTD:0};
               const monthKey=new Date().toISOString().slice(0,7);
               const daily=Object.entries(dailyByBu[P.bu]||{}).sort((a,b)=>a[0]<b[0]?-1:1).map(([d,v])=>({d,due:v.due,done:v.done}));
@@ -579,7 +676,7 @@ const server = http.createServer(async (req, res) => {
           try{
             const nv=v=>+String(v==null?0:v).replace(/,/g,'');
             for(const P of PLANTS_LIVE){
-              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              const tgt=live.plants?.[P.key]; if(!tgt) continue; if(focus && P.key!==focus) continue;
               const buKey=P.bu;
               try{
                 const dFrom = reqFrom || reqDate || new Date(Date.now()-9*864e5).toISOString().slice(0,10);
@@ -625,7 +722,7 @@ const server = http.createServer(async (req, res) => {
             const nv=v=>+String(v==null?0:v).replace(/,/g,'');
             const mf = {accl:['VRM-1','VRM-2'], apfil:['Loom'], ail:['Roughing Mill']};
             for(const P of PLANTS_LIVE){
-              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              const tgt=live.plants?.[P.key]; if(!tgt) continue; if(focus && P.key!==focus) continue;
               const mfl = (mf[P.key]||[]);
               const mcond = mfl.length ? ` AND (${mfl.map(m=>`strMachineName LIKE '${m}%'`).join(' OR ')})` : '';
               try{
@@ -635,17 +732,17 @@ const server = http.createServer(async (req, res) => {
                   SUM(ISNULL(numShiftDurationMinute,0)) Dur,
                   SUM(ISNULL(numPlannedDowntimeMin,0)) PlnDn,
                   SUM(ISNULL(numSMVCycleTime,0)*ISNULL(numActualOutputQuantity,0)) SmvOut,
-                  SUM(ISNULL(numActualOutputQuantity,0)) Out
+                  SUM(ISNULL(numActualOutputQuantity,0)) Out,
+                  SUM(ISNULL(numGoodOutputQuantity,0)) Good
                   FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 ${mcond} AND dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10),dteProductionDate,23) ORDER BY d DESC`, 200);
                 const wRows=await ibosQuery(`SELECT CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) Waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 ${mcond} AND h.dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10),h.dteProductionDate,23)`, 200);
                 const wasteBy={}; wRows.forEach(r=>{ wasteBy[r.d]=nv(r.Waste); });
                 const g=s=>s<=0?0:s;
                 tgt.oeeV2=rows.map(r=>{
-                  const Av=nv(r.Av), Npt=nv(r.Npt), Dur=nv(r.Dur), PlnDn=nv(r.PlnDn), SmvOut=nv(r.SmvOut), Out=nv(r.Out);
-                  const Waste=wasteBy[r.d]||0;
+                  const Av=nv(r.Av), Npt=nv(r.Npt), Dur=nv(r.Dur), PlnDn=nv(r.PlnDn), SmvOut=nv(r.SmvOut), Out=nv(r.Out), Good=nv(r.Good);
                   const A = g(Dur-PlnDn)===0?0:Math.min(g(Av-Npt)/g(Dur-PlnDn),1);
                   const P = g(Av)===0?0:Math.min(SmvOut/g(Av),1);
-                  const Q = g(Out)===0?0:Math.min(g(Out-Waste)/g(Out),1);
+                  const Q = g(Out)===0?0:Math.min(g(Good)/g(Out),1);
                   const OEE = A*P*Q;
                   return {d:r.d, A:+(A*100).toFixed(2), P:+(P*100).toFixed(2), Q:+(Q*100).toFixed(2), OEE:+(OEE*100).toFixed(2)};
                 });
@@ -655,15 +752,17 @@ const server = http.createServer(async (req, res) => {
                 const rows=await ibosQuery(`SELECT CONVERT(varchar(10),dteProductionDate,23) d,
                   SUM(ISNULL(numAvailableMinute,0)) Av, SUM(ISNULL(numNptLossTimeInMinutes,0)) Npt,
                   SUM(ISNULL(numShiftDurationMinute,0)) Dur, SUM(ISNULL(numPlannedDowntimeMin,0)) PlnDn,
-                  SUM(ISNULL(numSMVCycleTime,0)*ISNULL(numActualOutputQuantity,0)) SmvOut, SUM(ISNULL(numActualOutputQuantity,0)) Out
+                  SUM(ISNULL(numSMVCycleTime,0)*ISNULL(numActualOutputQuantity,0)) SmvOut, SUM(ISNULL(numActualOutputQuantity,0)) Out,
+                  SUM(ISNULL(numGoodOutputQuantity,0)) Good
                   FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10),dteProductionDate,23) ORDER BY d DESC`, 200);
                 const wRows=await ibosQuery(`SELECT CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) Waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 AND h.dteProductionDate >= DATEADD(day,-62,GETDATE()) GROUP BY CONVERT(varchar(10),h.dteProductionDate,23)`, 200);
                 const wasteBy={}; wRows.forEach(r=>{ wasteBy[r.d]=nv(r.Waste); });
+                const g2=s=>s<=0?0:s;
                 tgt.oeeV2All=rows.map(r=>{
-                  const Av=nv(r.Av), Npt=nv(r.Npt), Dur=nv(r.Dur), PlnDn=nv(r.PlnDn), SmvOut=nv(r.SmvOut), Out=nv(r.Out); const Waste=wasteBy[r.d]||0;
-                  const A=g(Dur-PlnDn)===0?0:Math.min(g(Av-Npt)/g(Dur-PlnDn),1);
-                  const P=g(Av)===0?0:Math.min(SmvOut/g(Av),1);
-                  const Q=g(Out)===0?0:Math.min(g(Out-Waste)/g(Out),1);
+                  const Av=nv(r.Av), Npt=nv(r.Npt), Dur=nv(r.Dur), PlnDn=nv(r.PlnDn), SmvOut=nv(r.SmvOut), Out=nv(r.Out), Good=nv(r.Good);
+                  const A=g2(Dur-PlnDn)===0?0:Math.min(g2(Av-Npt)/g2(Dur-PlnDn),1);
+                  const P=g2(Av)===0?0:Math.min(SmvOut/g2(Av),1);
+                  const Q=g2(Out)===0?0:Math.min(g2(Good)/g2(Out),1);
                   return {d:r.d, A:+(A*100).toFixed(2), P:+(P*100).toFixed(2), Q:+(Q*100).toFixed(2), OEE:+(A*P*Q*100).toFixed(2)};
                 });
               }catch(e){ console.error('  oeeV2All '+P.key+' failed', e.message); tgt.oeeV2All=tgt.oeeV2; }
@@ -673,7 +772,7 @@ const server = http.createServer(async (req, res) => {
           try{
             const nv=v=>+String(v==null?0:v).replace(/,/g,'');
             for(const P of PLANTS_LIVE){
-              const tgt=live.plants?.[P.key]; if(!tgt) continue;
+              const tgt=live.plants?.[P.key]; if(!tgt) continue; if(focus && P.key!==focus) continue;
               try{
                 const rows=await ibosQuery(`SELECT p.IntProductionPlanId id, p.StrProductionPlanCode code, p.IntPlannedQty planned,
                   CONVERT(varchar(10),p.DtePlanFromDate,120) pf, CONVERT(varchar(10),p.DtePlanToDate,120) pt,
@@ -689,10 +788,63 @@ const server = http.createServer(async (req, res) => {
               }catch(e){ console.error('  planV2 '+P.key+' failed', e.message); tgt.planV2=[]; }
             }
           }catch(e){ console.error('planV2 failed', e.message); }
+          // Per-machine actual/good/target + full OEE/Loss summary fields (for the machine summary report)
+          try{
+            const dFrom=reqFrom||new Date(Date.now()-9*864e5).toISOString().slice(0,10);
+            const dTo=reqTo||new Date().toISOString().slice(0,10);
+            const mNv=x=>+String(x==null?0:x).replace(/,/g,'');
+            for(const P of PLANTS_LIVE){
+              const tgt=live.plants?.[P.key]; if(!tgt) continue; if(focus && P.key!==focus) continue;
+              try{
+                const rows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, LTRIM(RTRIM(h.strUOMName)) u, CONVERT(varchar(10),h.dteProductionDate,23) d,
+                  SUM(ISNULL(h.numActualOutputQuantity,0)) actual, SUM(ISNULL(h.numGoodOutputQuantity,0)) good, SUM(ISNULL(h.numShiftTargetQuantity,0)) target,
+                  SUM(ISNULL(h.numAvailableMinute,0)) Av, SUM(ISNULL(h.numShiftDurationMinute,0)) Dur, SUM(ISNULL(h.numPlannedDowntimeMin,0)) Pln,
+                  SUM(ISNULL(h.numCapacityPerHr,0)*ISNULL(h.numShiftDurationMinute,0)/60.0) cap, SUM(ISNULL(h.numSMVCycleTime,0)*ISNULL(h.numActualOutputQuantity,0)) smv,
+                  SUM(ISNULL(h.numNptLossTimeInMinutes,0)) npt, SUM(ISNULL(h.numWastageTargetQuantity,0)) wastTgt,
+                  SUM(ISNULL(h.numActualRPM,0)) actRPM, SUM(ISNULL(h.numStandardRPM,0)) stdRPM
+                  FROM mes.tblOeeProdWasteHeader h WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ${pfIn(P,'h.strPlantName')} AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}'
+                  GROUP BY h.strMachineName, LTRIM(RTRIM(h.strUOMName)), CONVERT(varchar(10),h.dteProductionDate,23)`, 200);
+                const wRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 AND ${pfIn(P,'h.strPlantName')} AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}' GROUP BY h.strMachineName, CONVERT(varchar(10),h.dteProductionDate,23)`, 200);
+                const wasteBy={}; wRows.forEach(r=>{ wasteBy[r.m+'|'+r.d]=mNv(r.waste); });
+                const nptRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strWrokCenterName)) m, SUM(ISNULL(r.intLossTimeInMinutes,0)) nptLoss, COUNT(*) bdCount FROM mes.tblNPTHeader h WITH (NOLOCK) JOIN mes.tblNPTRow r WITH (NOLOCK) ON r.intNPTId=h.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ISNULL(r.isActive,1)=1 AND r.intCategoryId IN (456,457) AND h.dteLossTimeDate >= '${dFrom}' AND h.dteLossTimeDate <= '${dTo}' GROUP BY LTRIM(RTRIM(h.strWrokCenterName))`, 200);
+                const nptBy={}; nptRows.forEach(r=>{ nptBy[r.m]={nptLoss:mNv(r.nptLoss),bdCount:mNv(r.bdCount)}; });
+                tgt.machAll=rows.map(r=>{
+                  const nb=nptBy[r.m]||{nptLoss:0,bdCount:0};
+                  return {m:r.m,u:r.u,d:r.d,actual:mNv(r.actual),good:mNv(r.good),target:mNv(r.target),Av:mNv(r.Av),Dur:mNv(r.Dur),Pln:mNv(r.Pln),cap:mNv(r.cap),smv:mNv(r.smv),npt:mNv(r.npt),wastTgt:mNv(r.wastTgt),waste:wasteBy[r.m+'|'+r.d]||0,actRPM:mNv(r.actRPM),stdRPM:mNv(r.stdRPM),nptLoss:nb.nptLoss,bdCount:nb.bdCount};
+                });
+              }catch(e){ console.error('  machAll '+P.key+' failed', e.message); tgt.machAll=[]; }
+            }
+          }catch(e){ console.error('machAll failed', e.message); }
         }catch(e){ console.error('data merge failed', e.message); }
       }
-      const plant=url.searchParams.get('plant');
-      if(plant){
+      // Reconcile each plant's maxDate/minDate to its actual daily production dates.
+      // Fixes phantom snapshot maxDates (e.g. AEL Daal = 08-28 while real last = 01-21)
+      // and keeps the date picker/latest-date banner correct going forward (incl. newly added plants).
+      try{
+        for(const k of live.order||[]){
+          if(focus && k!==focus) continue;
+          const t=live.plants&&live.plants[k]; if(!t||!t.meta) continue;
+          const dd=(t.daily||[]).map(x=>x&&x.d).filter(Boolean).sort();
+          if(dd.length){
+            t.meta.maxDate=dd[dd.length-1];
+            if(!t.meta.minDate || t.meta.minDate==='2000-01-01' || dd[0] < t.meta.minDate) t.meta.minDate=dd[0];
+            const yr=dd[dd.length-1].slice(0,4);
+            t.meta.years=t.meta.years||[]; if(!t.meta.years.includes(yr)) t.meta.years.push(yr);
+          }
+        }
+      }catch(e){}
+      // Compute the 3 KPI blocks (Plan Variance / MOH / Maintenance) for the displayed plant (focused, else first)
+      try{
+        const fPlant = live.plants?.[focus] || live.plants?.[live.order?.[0]] || {};
+        const kFrom = reqFrom || reqDate || fPlant.meta?.minDate || '';
+        const kTo   = reqTo   || reqDate || fPlant.meta?.maxDate || '';
+        const kFocus = focus || live.order?.[0];
+        for(const P of PLANTS_LIVE){
+          const tgt=live.plants?.[P.key]; if(!tgt) continue; if(P.key!==kFocus) continue;
+          try{ tgt.kpis = await computeKpis(P.key, kFrom, kTo); }catch(e){ tgt.kpis={key:P.key,error:e.message}; }
+        }
+      }catch(e){ console.error('kpis failed', e.message); }
+      const plant=url.searchParams.get('plant');      if(plant){
         const p=live.plants?.[plant];
         if(!p) return json(res,404,{error:`Plant ${plant} not found`, available: live.order});
         return json(res,200,{plant: p, meta: p.meta, generated: live.generated});
@@ -937,6 +1089,12 @@ async function runAlertJob(){
     const r = await fetch(`http://localhost:${PORT}/api/alert-check`, { method:'POST' });
     const j = await r.json();
     console.log('alert job result:', JSON.stringify(j.error || { sent: (j.sent||[]).length, alerts: (j.sent||[]).map(s=>s.key) }));
+    // Also send the latest-data daily report to ALL configured recipients
+    try{
+      const dr = await fetch(`http://localhost:${PORT}/api/daily-report`, { method:'POST' });
+      const dj = await dr.json();
+      console.log('daily report result:', JSON.stringify(dj));
+    }catch(e){ console.error('daily report failed', e.message); }
   }catch(e){ console.error('alert job failed', e.message); }
 }
 function scheduleNextAlert(){

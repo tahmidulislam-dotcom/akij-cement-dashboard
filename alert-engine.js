@@ -11,6 +11,7 @@ const defaultConfig = {
   ail:        { name:'Akij Ispat Limited',            plant_head:['jubair@akijispat.com'],                     hob_ceo:['ceo.ail@akijispat.com'] },
   aafl:       { name:'Akij Agro Feed Limited',        plant_head:['headofplant3@akijagrofeed.com'],            hob_ceo:['ceo.aafl@akijagrofeed.com'] },
   aelflour:   { name:'Akij Essentials Limited',       plant_head:['ariful05@akijresource.com'],                hob_ceo:['coo.ael@akijessential.com'] },
+  aelmohadevpur:{name:'Akij Essentials Limited (Mohadevpur)', plant_head:['ariful05@akijresource.com'],         hob_ceo:['coo.ael@akijessential.com'] },
   aeldal:     { name:'Akij Essentials Limited (Dal)', plant_head:['ariful05@akijresource.com'],                hob_ceo:['coo.ael@akijessential.com'] },
   hrml:       { name:'Hashem Rice Mills Limited',     plant_head:['kamruzzaman@akijessential.com'],            hob_ceo:['coo.ael@akijessential.com'] },
   fal:        { name:'Fariq Agro Limited',            plant_head:['kamruzzaman@akijessential.com'],            hob_ceo:['coo.ael@akijessential.com'] },
@@ -21,7 +22,6 @@ const defaultConfig = {
   'armcl-rup':{name:'ARMCL Rupganj',                  plant_head:['headofplant3@akijagrofeed.com'],           hob_ceo:['coo.ael@akijessential.com'] },
   'armcl-ctg':{name:'ARMCL Chittagong',               plant_head:['headofplant3@akijagrofeed.com'],           hob_ceo:['coo.ael@akijessential.com'] },
   'armcl-gaz':{name:'ARMCL Gazipur',                  plant_head:['headofplant3@akijagrofeed.com'],           hob_ceo:['coo.ael@akijessential.com'] },
-  alel:       { name:'Akij Light Engineering Ltd',    plant_head:['headofplant3@akijagrofeed.com'],           hob_ceo:['coo.ael@akijessential.com'] },
 };
 
 // thresholds / targets
@@ -35,7 +35,7 @@ const T = {
         AAFL:{'2026-07':64,'2026-08':66,'2026-09':67,'2026-10':67,'2026-11':65,'2026-12':65,'2027-01':66,'2027-02':66,'2027-03':65,'2027-04':70,'2027-05':72,'2027-06':73},
         FAL:{'2026-07':49,'2026-08':49} },
 };
-const SBU = { accl:'ACCL', apfil:'APFIL', ail:'AIL', aelflour:'AEFML', hrml:'MRML', aafl:'AAFL', fal:'FAL' };
+const SBU = { accl:'ACCL', apfil:'APFIL', ail:'AIL', aelflour:'AEFML', aelmohadevpur:'AEFML', hrml:'MRML', aafl:'AAFL', fal:'FAL' };
 const NO_TARGET = ['armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','absl'];
 
 function num(v){ const n=parseFloat(String(v==null?'':v).replace(/,/g,'')); return isNaN(n)?0:n; }
@@ -47,20 +47,45 @@ function oeeTargetFor(key, ym){ const sbu=SBU[key]; if(!sbu||!T.oee[sbu])return 
 // Professional KPI dashboard report for one SBU
 function buildReportHTML(plant, key) {
   const ym=(plant&&plant.meta&&plant.meta.maxDate)?plant.meta.maxDate.slice(0,7):'';
-  const agg=(plant.daily||[]).reduce((a,r)=>{a.l+=r.l||0;a.r+=r.r||0;a.a+=r.a||0;a.g+=r.g||0;a.cr+=r.cr||0;a.cs+=r.cs||0;return a;},{l:0,r:0,a:0,g:0,cr:0,cs:0});
-  const A=agg.l>0?Math.min(agg.r/agg.l,1):null, P=agg.cr>0?agg.a/agg.cr:null, Q=agg.a>0?agg.g/agg.a:null;
-  const oee=(A!=null&&P!=null&&Q!=null)?A*P*Q:null;
-  const cu=agg.cs>0?agg.a/agg.cs:null;
+  const asOf=(plant&&plant.meta&&plant.meta.maxDate)||'';
+  const num=x=>{const n=parseFloat(String(x==null?0:x).replace(/,/g,''));return isNaN(n)?0:n;};
+  const pct=v=>v==null?'—':(v*100).toFixed(2)+'%';
+  const fmt=n=>n==null?'—':(Math.round(n)).toLocaleString('en-US');
+  // Totals from corrected all-machines data (machDailyAll fallback machAll/machDaily)
+  const dayRows=(plant.machAll||plant.machDailyAll||plant.machDaily||[]).filter(x=>x.d===asOf);
+  const prod=dayRows.reduce((s,x)=>s+num(x.actual),0);
+  const good=dayRows.reduce((s,x)=>s+num(x.good),0);
+  const tgt=dayRows.reduce((s,x)=>s+num(x.target),0);
+  // OEE / NPT from corrected sources
+  let oee=null; const ov=(plant.oeeV2All||[]).find(x=>x.d===asOf)||(plant.oeeV2All||[])[(plant.oeeV2All||[]).length-1];
+  if(ov&&ov.OEE!=null) oee=ov.OEE/100;
+  const cu=dayRows.reduce((s,x)=>s+num(x.cap),0)>0 ? prod/dayRows.reduce((s,x)=>s+num(x.cap),0) : null;
+  const q=prod>0?good/prod:null;
+  const nall=(plant.nptInfo&&plant.nptInfo.combinedAll&&plant.nptInfo.combinedAll.npt!=null)?plant.nptInfo.combinedAll.npt/100:null;
+  const wasteRows=(plant.waste||[]).filter(w=>w.d===asOf);
+  const wasteAct=wasteRows.reduce((s,w)=>s+num(w.waste),0);
+  const wasteTgt=wasteRows.reduce((s,w)=>s+num(w.target),0)||0;
+  const wastePct=prod>0?wasteAct/prod:null;
+  // ACCL actual output (Good Production): (VRM-1+VRM-2 good) Ton + (Packer good + BulkLoader good/20) Bag
+  let actLabel=fmt(good);
+  if(key==='accl' && (plant.machAll||[]).length){
+    let vrm=0,packer=0,bulk=0;
+    (plant.machAll||[]).filter(x=>x.d===asOf).forEach(x=>{ if(/vrm/i.test(x.m))vrm+=num(x.good); else if(/packer/i.test(x.m))packer+=num(x.good); else if(/bulk/i.test(x.m))bulk+=num(x.good); });
+    actLabel=`${Math.round(vrm)} Ton · ${Math.round(packer+bulk/20)} Bag`;
+  }
   const oeeT=oeeTargetFor(key, ym);
-  const moh=(plant.moh||[]).find(m=>m.k===ym);
-  const mohActual=moh?num(moh.c):0;
-  const mohTgt=(plant.mohBudget||[]).find(m=>m.k===ym); const mohTarget=mohTgt?num(mohTgt.b):0;
-  const waste=(plant.waste||[]).reduce((s,w)=>s+num(w.waste),0);
-  const actTgt=(plant.machDaily||[]).filter(x=>x.d===((plant.meta&&plant.meta.maxDate)||'')).reduce((s,x)=>s+num(x.actual),0);
-  const act = agg.a;
-  const title=`<h3 style="margin:0 0 6px;color:#0f766e">${key} — Performance Report (${ym})</h3>`;
+  const title=`<h3 style="margin:0 0 6px;color:#0f766e">${key} — Production KPIs (${asOf||ym})</h3>`;
   const row=(k,v,t)=>`<tr><td style="padding:7px 10px;border-bottom:1px solid #eee;color:#334155">${k}</td><td style="padding:7px 10px;text-align:right;border-bottom:1px solid #eee;font-weight:600;color:#0f172a">${v}</td>${t?`<td style="padding:7px 10px;border-bottom:1px solid #eee;color:#64748b">${t}</td>`:''}</tr>`;
-  const table=`<table style="border-collapse:collapse;width:100%;font-size:13px;margin:8px 0">${row('OEE', pct(oee), oeeT!=null?('Target '+oeeT+'%'):'')}${row('Availability', pct(A))}${row('Performance', pct(P))}${row('Quality / Yield', pct(Q))}${row('Capacity Utilization', pct(cu))}${row('Actual Output', fmt(act)+' (sum)')}${row('Waste', fmt(waste))}${row('MOH (actual)'+(mohTarget?' vs target':''), '৳'+fmt(mohActual), mohTarget?('৳'+fmt(mohTarget)):'')}</table>`;
+  const table=`<table style="border-collapse:collapse;width:100%;font-size:13px;margin:8px 0">
+    ${row('Production OEE', oee!=null?(oee*100).toFixed(2)+'%':'—', oeeT!=null?('Target '+oeeT+'%'):'')}
+    ${row('Capacity Utilization', cu!=null?(cu*100).toFixed(2)+'%':'—', 'Target 80%')}
+    ${row('NPT%', nall!=null?(nall*100).toFixed(2)+'%':'—')}
+    ${row('Yield', q!=null?(q*100).toFixed(2)+'%':'—')}
+    ${row('Wastage%', wastePct!=null?(wastePct*100).toFixed(2)+'%':'—')}
+    ${row('Wastage Target', fmt(wasteTgt))}
+    ${row('Actual Production (Good)', actLabel)}
+    ${row('Production Target (Target)', fmt(tgt))}
+    </table>`;
   return title+table;
 }
 
@@ -80,13 +105,26 @@ function wrapEmail(title, body){
 function evaluateSbu(key, plant) {
   const alerts = [];
   const ym = (plant && plant.meta && plant.meta.maxDate) ? plant.meta.maxDate.slice(0,7) : '2026-08';
+  const asOf = (plant && plant.meta && plant.meta.maxDate) || '';
   const put = (type, cond, msg, actual, target) => { if (cond) alerts.push({ type, msg, actual, target, sbu:key }); };
-  const agg = (plant.daily||[]).reduce((a,r)=>{ a.l+=r.l||0; a.r+=r.r||0; a.a+=r.a||0; a.g+=r.g||0; a.cr+=r.cr||0; a.cs+=r.cs||0; return a; },{l:0,r:0,a:0,g:0,cr:0,cs:0});
-  const A = agg.l>0? Math.min(agg.r/agg.l,1):null;
-  const P = agg.cr>0? agg.a/agg.cr:null;
-  const Q = agg.a>0? agg.g/agg.a:null;
-  const oee = (A!=null&&P!=null&&Q!=null)? A*P*Q : null;
-  const cu = agg.cs>0? agg.a/agg.cs : null;
+  // Today's (latest available date) metrics — NOT month-to-date / all-history aggregate
+  const dayRows = (plant.daily||[]).filter(r=>r.d===asOf);
+  const agg = dayRows.reduce((a,r)=>{ a.l+=r.l||0; a.r+=r.r||0; a.a+=r.a||0; a.g+=r.g||0; a.cr+=r.cr||0; a.cs+=r.cs||0; return a; },{l:0,r:0,a:0,g:0,cr:0,cs:0});
+  const ov = ((plant.oeeV2All||[]).find(x=>x.d===asOf)) || ((plant.oeeV2All||[])[(plant.oeeV2All||[]).length-1]);
+  let A, P, Q, oee, cu;
+  if (ov && ov.OEE != null) {
+    oee = ov.OEE/100;
+    A = ov.A != null ? ov.A/100 : null;
+    P = ov.P != null ? ov.P/100 : null;
+    Q = ov.Q != null ? ov.Q/100 : null;
+    cu = agg.cs > 0 ? agg.a/agg.cs : null;
+  } else {
+    A = agg.l>0? Math.min(agg.r/agg.l,1):null;
+    P = agg.cr>0? agg.a/agg.cr:null;
+    Q = agg.a>0? agg.g/agg.a:null;
+    oee = (A!=null&&P!=null&&Q!=null)? A*P*Q : null;
+    cu = agg.cs>0? agg.a/agg.cs : null;
+  }
   const plan = num(plant.planAch || ((plant.plan||[]).reduce((s,p)=>s+num(p.q),0)?1:null));
   // use plant.planAch if injected; else skip
   const ach = plant.planAch;
@@ -191,4 +229,41 @@ async function sendTestMail(live, emailConfig, to, sendFn, sbuOrAll, mode) {
 }
 function cfgName(live, key, cfg){ return (cfg&&cfg[key]&&cfg[key].name)||key; }
 
-module.exports = { evaluateAll, evaluateSbu, sendTestMail, defaultConfig, T };
+// Collect every configured recipient (all plant heads + HOB/CEOs + deputy) into a unique list.
+function collectRecipients(emailConfig){
+  const set = new Set();
+  for (const k of Object.keys(emailConfig||{})) {
+    if (k === '_deputy') continue;
+    const c = emailConfig[k] || {};
+    (c.plant_head||[]).forEach(e=>{ if(e) set.add(String(e).toLowerCase().trim()); });
+    (c.hob_ceo||[]).forEach(e=>{ if(e) set.add(String(e).toLowerCase().trim()); });
+  }
+  if (emailConfig && emailConfig._deputy) set.add(String(emailConfig._deputy).toLowerCase().trim());
+  return [...set];
+}
+
+// Build a single consolidated "latest data" report for every SBU (today's/latest available date only).
+function buildDailyReportHTML(live, emailConfig){
+  const today = new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
+  const keys = Object.keys(live.plants||{});
+  const cards = keys.map(key=>{
+    const plant = live.plants[key];
+    const cfg = (emailConfig && emailConfig[key]) || {};
+    return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:10px 0">
+      <div style="font-weight:700;color:#0f766e;margin-bottom:4px">${cfg.name||key}</div>${buildReportHTML(plant, key)}</div>`;
+  }).join('');
+  return { today, count: keys.length, cards };
+}
+
+// Send the latest-data daily report to ALL configured recipients (no threshold gating).
+async function sendDailyReport(live, emailConfig, sendFn){
+  const recipients = collectRecipients(emailConfig);
+  if (!recipients.length) return { sent:false, reason:'no recipients configured' };
+  const { today, count, cards } = buildDailyReportHTML(live, emailConfig);
+  const header = `<div style="font-size:13px;color:#334155;margin-bottom:6px">Daily production report — <b>latest available data</b> for <b>${count}</b> SBU(s) · <b>${today}</b>.</div>`;
+  const html = wrapEmail(`Daily Production Report — ${today}`, header + cards);
+  try { await sendFn(recipients, `📊 Daily Production Report — ${today}`, html); return { sent:true, to:recipients, count }; }
+  catch(e){ return { sent:false, error:e.message }; }
+}
+
+module.exports = { evaluateAll, evaluateSbu, sendTestMail, sendDailyReport, collectRecipients, buildDailyReportHTML, defaultConfig, T };
