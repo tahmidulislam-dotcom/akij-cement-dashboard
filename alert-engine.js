@@ -85,6 +85,8 @@ function buildReportHTML(plant, key) {
     ${row('Wastage Target', fmt(wasteTgt))}
     ${row('Actual Production (Good)', actLabel)}
     ${row('Production Target (Target)', fmt(tgt))}
+    ${row('5S Score', (plant.fiveS&&plant.fiveS.todayValue!=null?plant.fiveS.todayValue+'%':'—'), 'Target 70%')}
+    ${row('Kaizen (MTD)', (plant.kaizen&&plant.kaizen.mtdCount!=null?plant.kaizen.mtdCount:'—'), 'Target 10')}
     </table>`;
   return title+table;
 }
@@ -152,6 +154,11 @@ function evaluateSbu(key, plant) {
   if (waste>0 && (wasteTgt>0 && waste > wasteTgt)) put('Waste','5',`Waste ${waste} > target ${wasteTgt}`, waste, wasteTgt);
   if (mohTarget>0 && ((mohActual-mohTarget)/mohTarget)*100 > T.mohVariancePct) put('MOH','6',`MOH ${mohActual} > target ${mohTarget} (+${(((mohActual-mohTarget)/mohTarget)*100).toFixed(0)}%)`, mohActual, mohTarget);
   if (smPlan>0 && sm>0 && ((sm-smPlan)/smPlan)*100 > T.scheduleDevPct) put('Scheduled Maintenance','7',`Scheduled maint. ${sm} min vs plan ${smPlan}`, sm, smPlan);
+  // 5S + Kaizen (Google Sheets) — 5S below 70% target, Kaizen below 10 target
+  const f5 = (plant.fiveS && plant.fiveS.todayValue != null) ? num(plant.fiveS.todayValue) : null;
+  if (f5 != null && f5 < 70) put('5S','8',`5S Score ${f5.toFixed(1)}% < target 70%`, f5, 70);
+  const kz = (plant.kaizen && plant.kaizen.mtdCount != null) ? num(plant.kaizen.mtdCount) : null;
+  if (kz != null && kz < 10) put('Kaizen','9',`Kaizen MTD ${Math.round(kz)} < target 10`, kz, 10);
   return alerts;
 }
 

@@ -16,7 +16,17 @@ try {
 } catch (e) {}
 const sql = require('mssql');
 const alertEngine = require('./alert-engine.js');
-const { fetchFiveSKaizen } = require('./lib/sheets.js');
+const { fetchFiveSKaizen, SHEET_CONFIG } = require('./lib/sheets.js');
+
+// Attach 5S + Kaizen to every plant so all SBUs are evaluated against the 70% / 10 targets & shown in reports
+async function attachSheetsToAll(live){
+  try{
+    for (const k of Object.keys(SHEET_CONFIG)) {
+      if (!live.plants || !live.plants[k]) continue;
+      try { const sk = await fetchFiveSKaizen(k); if (sk) { live.plants[k].fiveS=sk.fiveS; live.plants[k].kaizen=sk.kaizen; } } catch(e){}
+    }
+  }catch(e){ console.error('attach sheets failed', e.message); }
+}
 
 const PORT = 3212;
 const DIR = __dirname;
@@ -314,6 +324,8 @@ const server = http.createServer(async (req, res) => {
         // reuse the /api/data live-merge by fetching our own endpoint
         const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
         if (r.ok) { const j = await r.json(); if (j && j.plants) live = j; }
+        // attach 5S + Kaizen to EVERY plant so all SBUs are evaluated against the 70% / 10 targets
+        await attachSheetsToAll(live);
         const cfg = cfg0;
         const state = loadAlertState();
         const reslt = await alertEngine.evaluateAll(live, cfg, state, async (to, subject, htmlBody) => { return await sendEmail(to, subject, htmlBody); });
@@ -332,6 +344,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
         const live = r.ok ? (await r.json()) : { plants:{} };
+        await attachSheetsToAll(live);
         const cfg = loadAlertCfg();
         const out = await alertEngine.sendDailyReport(live, cfg, async (to, subject, htmlBody) => { return await sendEmail(to, subject, htmlBody); });
         return json(res, 200, out);
@@ -344,6 +357,7 @@ const server = http.createServer(async (req, res) => {
         const key = (b && b.sbu) || null;   // send only this SBU (e.g. 'accl'), else all
         const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
         const live = r.ok ? (await r.json()) : { plants:{} };
+        await attachSheetsToAll(live);
         const cfg = loadAlertCfg();
         const out = await alertEngine.sendTestMail(live, cfg, to, async (t, subject, htmlBody) => { return await sendEmail(t, subject, htmlBody); }, key, b && b.deputy ? 'deputy' : null);
         return json(res, 200, out);
@@ -845,7 +859,7 @@ const server = http.createServer(async (req, res) => {
           try{ tgt.kpis = await computeKpis(P.key, kFrom, kTo); }catch(e){ tgt.kpis={key:P.key,error:e.message}; }
         }
         // 5S + Kaizen (Google Sheets) for the displayed plant
-        try{ const sk = await fetchFiveSKaizen(kFocus); if(sk){ const tgt=live.plants?.[kFocus]; if(tgt){ tgt.fiveS=sk.fiveS; tgt.kaizen=sk.kaizen; } } }catch(e){ console.error('5s/kaizen failed', e.message); }
+        try{ const sk = await fetchFiveSKaizen(kFocus, kFrom, kTo); if(sk){ const tgt=live.plants?.[kFocus]; if(tgt){ tgt.fiveS=sk.fiveS; tgt.kaizen=sk.kaizen; } } }catch(e){ console.error('5s/kaizen failed', e.message); }
       }catch(e){ console.error('kpis failed', e.message); }
       const plant=url.searchParams.get('plant');      if(plant){
         const p=live.plants?.[plant];

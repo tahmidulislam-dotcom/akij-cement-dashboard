@@ -432,7 +432,7 @@ module.exports = async (req, res) => {
       const tgt = out.plants?.[focus];
       if(tgt){ try{ tgt.kpis = await computeKpis(focus, kFrom, kTo); }catch(e){ tgt.kpis={key:focus,error:e.message}; } }
       // 5S + Kaizen (Google Sheets) for the displayed plant
-      try{ const sk = await fetchFiveSKaizen(focus); if(sk){ if(tgt){ tgt.fiveS=sk.fiveS; tgt.kaizen=sk.kaizen; } } }catch(e){ console.error('5s/kaizen failed', e.message); }
+      try{ const sk = await fetchFiveSKaizen(focus, kFrom, kTo); if(sk){ if(tgt){ tgt.fiveS=sk.fiveS; tgt.kaizen=sk.kaizen; } } }catch(e){ console.error('5s/kaizen failed', e.message); }
     }catch(e){ console.error('kpis failed', e.message); }
     if (plant) { const p = out.plants?.[plant]; if (!p) return res.status(404).json({error:`Plant ${plant} not found`, available: out.order}); return res.status(200).json({plant:p, meta:p.meta, generated:out.generated}); }
     return res.status(200).json(out);
