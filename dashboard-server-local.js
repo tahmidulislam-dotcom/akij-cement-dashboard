@@ -18,10 +18,11 @@ const sql = require('mssql');
 const alertEngine = require('./alert-engine.js');
 const { fetchFiveSKaizen, SHEET_CONFIG } = require('./lib/sheets.js');
 
-// Attach 5S + Kaizen to every plant so all SBUs are evaluated against the 70% / 10 targets & shown in reports
+// Attach 5S + Kaizen to AEL plants only (scoped per plant), so they're evaluated against the 70% / 10 targets & shown in reports
 async function attachSheetsToAll(live){
   try{
     for (const k of Object.keys(SHEET_CONFIG)) {
+      if (k !== 'aelflour' && k !== 'aelmohadevpur' && k !== 'aeldal') continue;   // AEL only
       if (!live.plants || !live.plants[k]) continue;
       try { const sk = await fetchFiveSKaizen(k); if (sk) { live.plants[k].fiveS=sk.fiveS; live.plants[k].kaizen=sk.kaizen; } } catch(e){}
     }
@@ -355,9 +356,12 @@ const server = http.createServer(async (req, res) => {
         const b = await readBody(req);
         const to = (b && b.to) || 'watidmahiya@gmail.com';
         const key = (b && b.sbu) || null;   // send only this SBU (e.g. 'accl'), else all
-        const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
+        const sbu0 = (b && b.sbu) || '';
+        const focusQ = sbu0 ? '&focus='+encodeURIComponent(sbu0) : '';
+        const r = await fetch(`http://localhost:${PORT}/api/data?live=1${focusQ}`);
         const live = r.ok ? (await r.json()) : { plants:{} };
-        await attachSheetsToAll(live);
+        if (sbu0) { try{ const sk = await fetchFiveSKaizen(sbu0); if(sk && live.plants && live.plants[sbu0]){ live.plants[sbu0].fiveS=sk.fiveS; live.plants[sbu0].kaizen=sk.kaizen; } }catch(e){} }
+        else await attachSheetsToAll(live);
         const cfg = loadAlertCfg();
         const out = await alertEngine.sendTestMail(live, cfg, to, async (t, subject, htmlBody) => { return await sendEmail(t, subject, htmlBody); }, key, b && b.deputy ? 'deputy' : null);
         return json(res, 200, out);

@@ -35,8 +35,9 @@ const T = {
         AAFL:{'2026-07':64,'2026-08':66,'2026-09':67,'2026-10':67,'2026-11':65,'2026-12':65,'2027-01':66,'2027-02':66,'2027-03':65,'2027-04':70,'2027-05':72,'2027-06':73},
         FAL:{'2026-07':49,'2026-08':49} },
 };
-const SBU = { accl:'ACCL', apfil:'APFIL', ail:'AIL', aelflour:'AEFML', aelmohadevpur:'AEFML', hrml:'MRML', aafl:'AAFL', fal:'FAL' };
+const SBU = { accl:'ACCL', apfil:'APFIL', ail:'AIL', aelflour:'AEFML', aelmohadevpur:'', hrml:'MRML', aafl:'AAFL', fal:'FAL' };
 const NO_TARGET = ['armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz','absl'];
+const AEL_PLANTS = ['aelflour','aelmohadevpur','aeldal'];   // BU AEL = 3 plants — combined alert email
 
 function num(v){ const n=parseFloat(String(v==null?'':v).replace(/,/g,'')); return isNaN(n)?0:n; }
 function pct(v){ return v==null?'—':(v*100).toFixed(1)+'%'; }
@@ -66,27 +67,35 @@ function buildReportHTML(plant, key) {
   const wasteAct=wasteRows.reduce((s,w)=>s+num(w.waste),0);
   const wasteTgt=wasteRows.reduce((s,w)=>s+num(w.target),0)||0;
   const wastePct=prod>0?wasteAct/prod:null;
+  // Unit of measurement — from item/product UoM in the production data (prefer weight: MT/KG/Ton, else first)
+  const _uoms=dayRows.map(x=>x&&x.u).filter(Boolean);
+  const uom=((_uoms.find(u=>/ton|mt|kg|kilogram/i.test(String(u)))) || _uoms[0] || '');
+  const uomTxt = uom || '—';
+  const isAEL = AEL_PLANTS.includes(key);
   // ACCL actual output (Good Production): (VRM-1+VRM-2 good) Ton + (Packer good + BulkLoader good/20) Bag
-  let actLabel=fmt(good);
+  let actLabel;
   if(key==='accl' && (plant.machAll||[]).length){
     let vrm=0,packer=0,bulk=0;
     (plant.machAll||[]).filter(x=>x.d===asOf).forEach(x=>{ if(/vrm/i.test(x.m))vrm+=num(x.good); else if(/packer/i.test(x.m))packer+=num(x.good); else if(/bulk/i.test(x.m))bulk+=num(x.good); });
     actLabel=`${Math.round(vrm)} Ton · ${Math.round(packer+bulk/20)} Bag`;
+  } else {
+    actLabel = good>0 ? (fmt(good)+' '+uomTxt) : '—';
   }
   const oeeT=oeeTargetFor(key, ym);
   const title=`<h3 style="margin:0 0 6px;color:#0f766e">${key} — Production KPIs (${asOf||ym})</h3>`;
   const row=(k,v,t)=>`<tr><td style="padding:7px 10px;border-bottom:1px solid #eee;color:#334155">${k}</td><td style="padding:7px 10px;text-align:right;border-bottom:1px solid #eee;font-weight:600;color:#0f172a">${v}</td>${t?`<td style="padding:7px 10px;border-bottom:1px solid #eee;color:#64748b">${t}</td>`:''}</tr>`;
   const table=`<table style="border-collapse:collapse;width:100%;font-size:13px;margin:8px 0">
-    ${row('Production OEE', oee!=null?(oee*100).toFixed(2)+'%':'—', oeeT!=null?('Target '+oeeT+'%'):'')}
+    ${row('Production OEE', oee!=null?(oee*100).toFixed(2)+'%':'—', oeeT!=null?('Target '+oeeT+'%'):'No OEE target')}
     ${row('Capacity Utilization', cu!=null?(cu*100).toFixed(2)+'%':'—', 'Target 80%')}
     ${row('NPT%', nall!=null?(nall*100).toFixed(2)+'%':'—')}
     ${row('Yield', q!=null?(q*100).toFixed(2)+'%':'—')}
     ${row('Wastage%', wastePct!=null?(wastePct*100).toFixed(2)+'%':'—')}
-    ${row('Wastage Target', fmt(wasteTgt))}
     ${row('Actual Production (Good)', actLabel)}
-    ${row('Production Target (Target)', fmt(tgt))}
-    ${row('5S Score', (plant.fiveS&&plant.fiveS.todayValue!=null?plant.fiveS.todayValue+'%':'—'), 'Target 70%')}
-    ${row('Kaizen (MTD)', (plant.kaizen&&plant.kaizen.mtdCount!=null?plant.kaizen.mtdCount:'—'), 'Target 10')}
+    ${row('Production Target (Target)', fmt(tgt)+' '+uomTxt)}
+    ${row('Actual Wastage', fmt(wasteAct)+' '+uomTxt)}
+    ${row('Wastage Target', fmt(wasteTgt)+' '+uomTxt)}
+    ${isAEL ? row('5S Score', (plant.fiveS&&plant.fiveS.todayValue!=null?plant.fiveS.todayValue+'%':'—'), 'Target 70%') : ''}
+    ${isAEL ? row('Kaizen (MTD)', (plant.kaizen&&plant.kaizen.mtdCount!=null?plant.kaizen.mtdCount:'—'), 'Target 10') : ''}
     </table>`;
   return title+table;
 }
@@ -166,10 +175,12 @@ function evaluateSbu(key, plant) {
 async function evaluateAll(live, emailConfig, state, sendFn) {
   const today = new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
   if (state.date !== today) { state.date = today; state.counts = {}; }
-  const sent = [], seen = [], deputyItems = [];
+  const sent = [], seen = [], deputyItems = [], aelAlerted = [];
   for (const key of Object.keys(live.plants||{})) {
     const plant = live.plants[key];
     const alerts = evaluateSbu(key, plant);
+    // AEL is handled as ONE combined email across its 3 plants — collect and skip individual sends
+    if (AEL_PLANTS.includes(key)) { if (alerts.length) aelAlerted.push({ key, plant, alerts }); continue; }
     if (!alerts.length) continue;
     const cfg = emailConfig[key] || {};
     const st = state.counts[key] = state.counts[key] || { c: 0, kinds: {} };
@@ -193,6 +204,31 @@ async function evaluateAll(live, emailConfig, state, sendFn) {
     if (!to.length) continue;
     try { await sendFn(to, `🚨 ALERT ${cfg.name||key} — ${alerts.map(a=>a.type).join(', ')}`, html); sent.push({ key, tier, to, types: alerts.map(a=>a.type) }); }
     catch(e){ sent.push({ key, tier, to, error: e.message }); }
+  }
+  // Combined AEL alert email — ONE email covering all 3 AEL plants when any triggers (Plant Head → HOB/CEO → Deputy)
+  if (aelAlerted.length) {
+    const aelCfg = emailConfig['aelflour'] || emailConfig['aelmohadevpur'] || emailConfig['aeldal'] || {};
+    const st = state.counts['ael-group'] = state.counts['ael-group'] || { c: 0 };
+    st.c += 1;
+    const tier = st.c <= 1 ? 'plant_head' : (st.c === 2 ? 'hob_ceo' : 'deputy');
+    const tierLabel = tier==='plant_head'?'1st escalation (Plant Head)':(tier==='hob_ceo'?'2nd escalation (HOB/CEO)':'3rd escalation (Deputy COO)');
+    const triggeredKeys = aelAlerted.map(a=>a.key);
+    const aelPlants = AEL_PLANTS.filter(k=>live.plants && live.plants[k]);
+    const body = aelPlants.map(k=>{
+      const pl = live.plants[k];
+      const cfg = emailConfig[k] || {};
+      const al = (aelAlerted.find(x=>x.key===k)||{}).alerts || [];
+      const alertBox = al.length
+        ? `<div style="background:#fff7ed;border:1px solid #fed7aa;border-left:4px solid #f97316;border-radius:8px;padding:12px 14px;margin:10px 0"><div style="color:#9a3412;font-weight:700;font-size:13px;margin-bottom:6px">⚠ Triggered conditions</div><table style="border-collapse:collapse;width:100%;font-size:12.5px">${al.map(a=>`<tr><td style="padding:5px 8px;border-bottom:1px solid #fed7aa;font-weight:600;color:#ea580c">${a.type}</td><td style="padding:5px 8px;border-bottom:1px solid #fed7aa;color:#7c2d12">${a.msg}</td></tr>`).join('')}</table></div>`
+        : `<div style="color:#64748b;font-size:12px;margin:8px 0">No alert triggered</div>`;
+      return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:10px 0"><div style="font-weight:700;color:#0f766e;margin-bottom:4px">${cfg.name||k} ${triggeredKeys.includes(k)?'<span style="color:#c0392b">(alerted)</span>':''}</div>${alertBox}${buildReportHTML(pl, k)}</div>`;
+    }).join('');
+    const header = `<div style="font-size:13px;color:#334155;margin-bottom:6px">AEL (Akij Essentials) combined alert on <b>${today}</b> — ${triggeredKeys.length} of ${AEL_PLANTS.length} plant(s) triggered. Each section shows all 3 AEL plants.</div>`;
+    const to = tier === 'plant_head' ? (aelCfg.plant_head||[]) : (tier === 'hob_ceo' ? (aelCfg.hob_ceo||[]) : [emailConfig._deputy || 'deputy.coo@akijresource.com']);
+    if (to.length) {
+      try { await sendFn(to, `🚨 AEL ALERT — ${triggeredKeys.join(', ')} (${tierLabel})`, wrapEmail(`AEL — Akij Essentials Alert (${tierLabel})`, header + body)); sent.push({ key:'AEL', tier, to, types: aelAlerted.flatMap(a=>a.alerts.map(x=>x.type)) }); }
+      catch(e){ sent.push({ key:'AEL', tier, to, error: e.message }); }
+    }
   }
   // Combined Deputy COO mail — one mail for ALL SBUs (each SBU's alert + report)
   if (deputyItems.length) {
