@@ -205,7 +205,9 @@ async function gmailSend(to, subject, html) {
 /* ---------- SMTP sender (App Password @ smtp.gmail.com:465) — used when SMTP_APP_PASSWORD is set ---------- */
 const tls = require('tls');
 function smtpSend(to, subject, html) {
-  const user = process.env.SMTP_EMAIL || process.env.SENDER_EMAIL || 'deputy.coo@akijresource.com';
+  const FORBIDDEN = 'tahmidulislam@akijresource.com';
+  let user = process.env.SMTP_EMAIL || process.env.SENDER_EMAIL || 'deputy.coo@akijresource.com';
+  if (String(user).toLowerCase() === FORBIDDEN) user = 'deputy.coo@akijresource.com';   // never send from the developer account
   const pass = process.env.SMTP_APP_PASSWORD;
   return new Promise((resolve, reject) => {
     const sock = tls.connect(465, 'smtp.gmail.com', { servername: 'smtp.gmail.com' }, () => {
@@ -241,6 +243,9 @@ function smtpSend(to, subject, html) {
 }
 async function sendEmail(to, subject, html) {
   if (process.env.SMTP_APP_PASSWORD) return smtpSend(to, subject, html);
+  // Gmail OAuth fallback — never send from the developer account
+  if ((process.env.GOOGLE_EMAIL || '').toLowerCase() === 'tahmidulislam@akijresource.com')
+    throw new Error('Refusing to send from tahmidulislam@akijresource.com — configure SMTP_EMAIL/SMTP_APP_PASSWORD as the sender');
   return gmailSend(to, subject, html);
 }
 
