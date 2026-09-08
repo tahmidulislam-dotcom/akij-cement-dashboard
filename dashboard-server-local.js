@@ -16,6 +16,7 @@ try {
 } catch (e) {}
 const sql = require('mssql');
 const alertEngine = require('./alert-engine.js');
+const { fetchFiveSKaizen } = require('./api/sheets.js');
 
 const PORT = 3212;
 const DIR = __dirname;
@@ -843,6 +844,8 @@ const server = http.createServer(async (req, res) => {
           const tgt=live.plants?.[P.key]; if(!tgt) continue; if(P.key!==kFocus) continue;
           try{ tgt.kpis = await computeKpis(P.key, kFrom, kTo); }catch(e){ tgt.kpis={key:P.key,error:e.message}; }
         }
+        // 5S + Kaizen (Google Sheets) for the displayed plant
+        try{ const sk = await fetchFiveSKaizen(kFocus); if(sk){ const tgt=live.plants?.[kFocus]; if(tgt){ tgt.fiveS=sk.fiveS; tgt.kaizen=sk.kaizen; } } }catch(e){ console.error('5s/kaizen failed', e.message); }
       }catch(e){ console.error('kpis failed', e.message); }
       const plant=url.searchParams.get('plant');      if(plant){
         const p=live.plants?.[plant];

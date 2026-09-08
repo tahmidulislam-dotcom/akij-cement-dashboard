@@ -758,6 +758,11 @@ function chartNoData(canvasId, msg){
   const c=document.getElementById(canvasId); if(!c) return;
   const box=c.parentElement; if(box) box.innerHTML='<div class="empty-msg">'+(msg||'No data available for this period')+'</div>';
 }
+function progBar(val, target, label){
+  const pct = target>0 ? Math.min(100, Math.round(val/target*100)) : 0;
+  const color = pct>=100?'var(--green)':(pct>=80?'var(--blue)':(pct>=50?'var(--amber)':'var(--red)'));
+  return `<div style="display:flex;align-items:center;gap:8px;margin-top:5px"><div style="flex:1;height:6px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${color};border-radius:4px"></div></div><span style="font-size:10px;color:var(--mut)">${pct}%</span></div><div style="color:var(--mut);font-size:10px;margin-top:2px">${label||('Target '+target)} · ${fmt(val,1)} / ${fmt(target,1)}</div>`;
+}
 function render(){
   Object.values(charts).forEach(c=>c&&c.destroy());
   for(const k in charts) delete charts[k];
@@ -922,6 +927,8 @@ function render(){
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},
     {l:'Actual Output', v:(_goodVal!=null?_goodVal:fmt(_goodSum,0)), s:prodLine(), ac:'var(--teal)'},
     {l:'Waste', v:(_wasteSum>0?fmt(_wasteSum,1):'—'), s:'Summed across all machines', ac:'var(--red)'},
+    {l:'5S Score', v:(P.fiveS&&P.fiveS.todayValue!=null?fmt(P.fiveS.todayValue,1)+'%':'—'), s:(P.fiveS&&P.fiveS.todayValue!=null?(progBar(P.fiveS.todayValue,70,'Target 70%')+`<div style="color:var(--mut);font-size:10px;margin-top:2px">Latest ${P.fiveS.latestDate||''} · ${P.fiveS.count} audit(s) · Google 5S form</div>`):'No 5S data'), ac:'var(--purple)'},
+    {l:'Kaizen (MTD)', v:(P.kaizen&&P.kaizen.mtdCount!=null?fmt(P.kaizen.mtdCount,0):'—'), s:(P.kaizen&&P.kaizen.mtdCount!=null?(progBar(P.kaizen.mtdCount,10,'Target 10')+`<div style="color:var(--mut);font-size:10px;margin-top:2px">${P.kaizen.month} · ${P.kaizen.total} total · IC card</div>`):'No Kaizen data'), ac:'var(--amber)'},
   ];
   $('kpiGrid').innerHTML = kpis.map(k=>`<div class="kpi" style="--ac:${k.ac}"><div class="lbl">${k.l}</div><div class="val">${k.v}</div><div class="sub">${k.s||''}</div></div>`).join('');
 

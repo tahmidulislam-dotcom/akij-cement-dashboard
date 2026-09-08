@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { callMCP } = require('./_mcp.js');
+const { fetchFiveSKaizen } = require('./sheets.js');
 
 const PLANTS = [
   {key:'accl', bu:4, plants:['ACCL Narayanganj']},{key:'apfil', bu:8, plants:['Narayangonj Plant']},{key:'aafl', bu:232, plants:['AAFML Narayangonj Factory']},{key:'aelflour', bu:144, plants:['AEL Flour Narayanganj']},{key:'aelmohadevpur', bu:144, plants:['AEL Mohadevpur']},{key:'aeldal', bu:144, plants:['AEL Dal Narayanganj']},{key:'ail', bu:224, plants:['Akij Ispat Munshiganj']},{key:'absl', bu:220, plants:['ABSL Ashuliya']},{key:'armcl-ngnj', bu:175, plants:['ARMCL Narayanganj Plant']},{key:'armcl-dhour', bu:175, plants:['ARMCL Dhour Plant']},{key:'armcl-rup', bu:175, plants:['ARMCL Rupgonj Plant']},{key:'armcl-ctg', bu:175, plants:['ARMCL Chittagong Plant']},{key:'armcl-gaz', bu:175, plants:['ARMCL Gazipur Plant']},{key:'hrml', bu:188, plants:['Hashem Rice Mills']},{key:'fal', bu:189, plants:['Fariq Agro Ltd.']},{key:'alel', bu:237, plants:[]},
@@ -430,6 +431,8 @@ module.exports = async (req, res) => {
       const kTo   = req.query.to   || req.query.date || fPlant.meta?.maxDate || '';
       const tgt = out.plants?.[focus];
       if(tgt){ try{ tgt.kpis = await computeKpis(focus, kFrom, kTo); }catch(e){ tgt.kpis={key:focus,error:e.message}; } }
+      // 5S + Kaizen (Google Sheets) for the displayed plant
+      try{ const sk = await fetchFiveSKaizen(focus); if(sk){ if(tgt){ tgt.fiveS=sk.fiveS; tgt.kaizen=sk.kaizen; } } }catch(e){ console.error('5s/kaizen failed', e.message); }
     }catch(e){ console.error('kpis failed', e.message); }
     if (plant) { const p = out.plants?.[plant]; if (!p) return res.status(404).json({error:`Plant ${plant} not found`, available: out.order}); return res.status(200).json({plant:p, meta:p.meta, generated:out.generated}); }
     return res.status(200).json(out);
