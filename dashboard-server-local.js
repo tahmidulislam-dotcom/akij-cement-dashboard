@@ -16,7 +16,7 @@ try {
 } catch (e) {}
 const sql = require('mssql');
 const alertEngine = require('./alert-engine.js');
-const { fetchFiveSKaizen } = require('./api/sheets.js');
+const { fetchFiveSKaizen } = require('./lib/sheets.js');
 
 const PORT = 3212;
 const DIR = __dirname;
