@@ -18,11 +18,10 @@ const sql = require('mssql');
 const alertEngine = require('./alert-engine.js');
 const { fetchFiveSKaizen, SHEET_CONFIG } = require('./lib/sheets.js');
 
-// Attach 5S + Kaizen to AEL plants only (scoped per plant), so they're evaluated against the 70% / 10 targets & shown in reports
+// Attach 5S + Kaizen to every plant (scoped per plant) so they're evaluated against the 70% / 10 targets & shown in reports
 async function attachSheetsToAll(live){
   try{
     for (const k of Object.keys(SHEET_CONFIG)) {
-      if (k !== 'aelflour' && k !== 'aelmohadevpur' && k !== 'aeldal') continue;   // AEL only
       if (!live.plants || !live.plants[k]) continue;
       try { const sk = await fetchFiveSKaizen(k); if (sk) { live.plants[k].fiveS=sk.fiveS; live.plants[k].kaizen=sk.kaizen; } } catch(e){}
     }

@@ -71,7 +71,6 @@ function buildReportHTML(plant, key) {
   const _uoms=dayRows.map(x=>x&&x.u).filter(Boolean);
   const uom=((_uoms.find(u=>/ton|mt|kg|kilogram/i.test(String(u)))) || _uoms[0] || '');
   const uomTxt = uom || '—';
-  const isAEL = AEL_PLANTS.includes(key);
   // ACCL actual output (Good Production): (VRM-1+VRM-2 good) Ton + (Packer good + BulkLoader good/20) Bag
   let actLabel;
   if(key==='accl' && (plant.machAll||[]).length){
@@ -93,9 +92,9 @@ function buildReportHTML(plant, key) {
     ${row('Actual Production (Good)', actLabel)}
     ${row('Production Target (Target)', fmt(tgt)+' '+uomTxt)}
     ${row('Actual Wastage', fmt(wasteAct)+' '+uomTxt)}
-    ${row('Wastage Target', fmt(wasteTgt)+' '+uomTxt)}
-    ${isAEL ? row('5S Score', (plant.fiveS&&plant.fiveS.todayValue!=null?plant.fiveS.todayValue+'%':'—'), 'Target 70%') : ''}
-    ${isAEL ? row('Kaizen (MTD)', (plant.kaizen&&plant.kaizen.mtdCount!=null?plant.kaizen.mtdCount:'—'), 'Target 10') : ''}
+    {row('Wastage Target', fmt(wasteTgt)+' '+uomTxt)}
+    ${row('5S Score', (plant.fiveS&&plant.fiveS.todayValue!=null?plant.fiveS.todayValue+'%':'—'), 'Target 70%')}
+    ${row('Kaizen (MTD)', (plant.kaizen&&plant.kaizen.mtdCount!=null?plant.kaizen.mtdCount:'—'), 'Target 10')}
     </table>`;
   return title+table;
 }
@@ -104,7 +103,7 @@ function wrapEmail(title, body){
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f1f5f9;font-family:Segoe UI,Arial,sans-serif">
     <div style="max-width:700px;margin:24px auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0">
       <div style="background:linear-gradient(135deg,#0f766e,#134e4a);padding:20px 24px;color:#ffffff">
-        <h2 style="margin:0;font-size:18px">🏭 Akij Group — Performance Alert</h2>
+        <h2 style="margin:0;font-size:18px">🏭 Akij Resource LTD — Manufacturing Excellence Report</h2>
         <div style="font-size:12.5px;opacity:.9;margin-top:4px">${title}</div>
       </div>
       <div style="padding:22px 24px;color:#0f172a;font-size:14px;line-height:1.6">${body}</div>
