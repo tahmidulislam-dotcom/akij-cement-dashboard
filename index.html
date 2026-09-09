@@ -116,22 +116,12 @@ tr:last-child td{border-bottom:none}
 <!-- KPI CARDS -->
 <div class="kpis" id="kpiGrid"></div>
 
-<!-- 3 traceable KPI blocks: Plan Variance / MOH / Scheduled Maintenance -->
+<!-- KPI block: MOH -->
 <div class="grid" style="margin-top:16px" id="kpiBlocks">
-  <div class="panel c4">
-    <h3>📋 Production Plan Variance</h3>
-    <div class="note">Avg Overall Progress + Target Set · plan-window within period</div>
-    <div id="kpiPv" class="kpi3"></div>
-  </div>
-  <div class="panel c4">
+  <div class="panel c12">
     <h3>💰 MOH — Manufacturing Overhead</h3>
     <div class="note">GL 4010001 · net MOH (production-received entries are negative)</div>
     <div id="kpiMoh" class="kpi3"></div>
-  </div>
-  <div class="panel c4">
-    <h3>🔧 Scheduled Maintenance</h3>
-    <div class="note">done / total · no percentage</div>
-    <div id="kpiMaint" class="kpi3"></div>
   </div>
 </div>
 
@@ -927,7 +917,7 @@ function render(){
     {l:'MOH Cost (Net)', v:'৳'+fmt(mohTot/1e6,2)+' M', s:(function(){ if(!mohRows.length) return 'No MOH bookings in range'; const last=mohRows[mohRows.length-1]; const parts=[`${mohRows.length} month(s)`]; if(last && last.gross!=null) parts.push(`gross ৳${fmt(last.gross/1e6,2)}M − pool ৳${fmt(last.pool/1e6,2)}M`); return parts.join(' · '); })(), ac:'var(--green)'},
     {l:'Actual Output', v:(_goodVal!=null?_goodVal:fmt(_goodSum,0)), s:prodLine(), ac:'var(--teal)'},
     {l:'Waste', v:(_wasteSum>0?fmt(_wasteSum,1):'—'), s:'Summed across all machines', ac:'var(--red)'},
-    ...((P.meta.bu===144)? [
+    ...((P.fiveS || P.kaizen)? [
       {l:'5S Score', v:(P.fiveS&&P.fiveS.todayValue!=null?fmt(P.fiveS.todayValue,1)+'%':'—'), s:(P.fiveS&&P.fiveS.todayValue!=null?(progBar(P.fiveS.todayValue,70,'Target 70%')+`<div style="color:var(--mut);font-size:10px;margin-top:2px">Latest ${P.fiveS.latestDate||''} · ${P.fiveS.count} audit(s) · Google 5S form</div>`):'No 5S data'), ac:'var(--purple)'},
       {l:'Kaizen (MTD)', v:(P.kaizen&&P.kaizen.mtdCount!=null?fmt(P.kaizen.mtdCount,0):'—'), s:(P.kaizen&&P.kaizen.mtdCount!=null?(progBar(P.kaizen.mtdCount,10,'Target 10')+`<div style="color:var(--mut);font-size:10px;margin-top:2px">${P.kaizen.month} · ${P.kaizen.total} total · IC card</div>`):'No Kaizen data'), ac:'var(--amber)'},
     ] : []),
@@ -1136,31 +1126,19 @@ function render(){
   renderKpiBlocks();
 }
 
-/* ---------- 3 traceable KPI blocks (Plan Variance / MOH / Scheduled Maintenance) ---------- */
+/* ---------- KPI block: MOH ---------- */
 function k3(label, value, sub, trace){
   return `<div class="k" title="${String(trace||sub||'').replace(/"/g,'&quot;')}"><div class="lbl">${label}</div><div class="val">${value}</div><div class="sub">${sub||''}</div><div class="tr">${trace||''}</div></div>`;
 }
 function renderKpiBlocks(){
-  const elPv=$('kpiPv'), elMoh=$('kpiMoh'), elMaint=$('kpiMaint');
-  if(!elPv||!elMoh||!elMaint) return;
+  const elMoh=$('kpiMoh');
+  if(!elMoh) return;
   const K=(P&&P.kpis)||{};
-  // KPI 1 — Production Plan Variance
-  const pv=K.planVariance||{};
-  elPv.innerHTML = (pv.error || !pv.planCount)
-    ? `<div class="k"><div class="lbl">Plan Variance</div><div class="val">No data</div><div class="sub">No plan lines for this period</div><div class="tr">${pv.source||'mes.tblProductionPlanning'}</div></div>`
-    : k3('Avg Overall Progress', pv.avgProgress!=null?pv.avgProgress+'%':'—', `AVG(actual ÷ planned) · ${pv.planCount} plan line(s)`, pv.source)
-      + k3('Target Set', fmt(pv.targetSet||0,0), 'SUM(intPlannedQty) in period', 'mes.tblProductionPlanning.intPlannedQty');
-  // KPI 2 — MOH
   const moh=K.moh||{};
   elMoh.innerHTML = (moh.error || (moh.net==null))
     ? `<div class="k"><div class="lbl">MOH</div><div class="val">No data</div><div class="sub">No GL 4010001 bookings</div><div class="tr">${moh.source||'fin.tblAccountingJournal'}</div></div>`
     : k3('Net MOH (period)', '৳'+fmt(moh.net/1000000,2)+' M', `GL 4010001 · ${(moh.byDay||[]).length} day(s)`, moh.source)
       + k3('MTD MOH', '৳'+fmt(moh.mtd/1000000,2)+' M', 'SUM(numAmount) month-to-date of '+((TO||'').slice(0,7)), 'fin.tblAccountingJournal.numAmount');
-  // KPI 3 — Scheduled Maintenance (done / total, no %)
-  const mt=K.maintenance||{};
-  elMaint.innerHTML = (mt.error || (!mt.total && !mt.done))
-    ? `<div class="k"><div class="lbl">Scheduled Maintenance</div><div class="val">0 / 0</div><div class="sub">No preventive maintenance due</div><div class="tr">${mt.source||'ast.tblAssetMaintenanceHeader'}</div></div>`
-    : k3('Done / Total', mt.value||(mt.done+' / '+mt.total), 'scheduled PM due in period', mt.source);
 }
 
 document.addEventListener('DOMContentLoaded', init);
