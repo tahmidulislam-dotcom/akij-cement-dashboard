@@ -311,6 +311,7 @@ const server = http.createServer(async (req, res) => {
       if (b.config) {
         for (const [k, v] of Object.entries(b.config)) {
           if (k === '_deputy') { cfg._deputy = sanitizeList([v])[0] || v || 'deputy.coo@akijresource.com'; continue; }
+          if (k === '_additional') { cfg._additional = sanitizeList(Array.isArray(v) ? v : String(v||'').split(',')); continue; }
           cfg[k] = cfg[k] || {};
           if (v) { if (v.name) cfg[k].name = v.name; if (v.plant_head) cfg[k].plant_head = sanitizeList(v.plant_head); if (v.hob_ceo) cfg[k].hob_ceo = sanitizeList(v.hob_ceo); }
         }
@@ -359,12 +360,13 @@ const server = http.createServer(async (req, res) => {
       try {
         const b = await readBody(req);
         const to = (b && b.to) || 'watidmahiya@gmail.com';
-        const key = (b && b.sbu) || null;   // send only this SBU (e.g. 'accl'), else all
+        const key = (b && b.sbu) || null;   // send only this SBU (e.g. 'accl'), 'ael' for combined AEL, else all
         const sbu0 = (b && b.sbu) || '';
-        const focusQ = sbu0 ? '&focus='+encodeURIComponent(sbu0) : '';
+        const isAel = sbu0 === 'ael';
+        const focusQ = (sbu0 && !isAel) ? '&focus='+encodeURIComponent(sbu0) : '';
         const r = await fetch(`http://localhost:${PORT}/api/data?live=1${focusQ}`);
         const live = r.ok ? (await r.json()) : { plants:{} };
-        if (sbu0) { try{ const sk = await fetchFiveSKaizen(sbu0); if(sk && live.plants && live.plants[sbu0]){ live.plants[sbu0].fiveS=sk.fiveS; live.plants[sbu0].kaizen=sk.kaizen; } }catch(e){} }
+        if (sbu0 && !isAel) { try{ const sk = await fetchFiveSKaizen(sbu0); if(sk && live.plants && live.plants[sbu0]){ live.plants[sbu0].fiveS=sk.fiveS; live.plants[sbu0].kaizen=sk.kaizen; } }catch(e){} }
         else await attachSheetsToAll(live);
         const cfg = loadAlertCfg();
         const out = await alertEngine.sendTestMail(live, cfg, to, async (t, subject, htmlBody) => { return await sendEmail(t, subject, htmlBody); }, key, b && b.deputy ? 'deputy' : null);

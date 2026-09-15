@@ -172,11 +172,21 @@ function evaluateSbu(key, plant) {
   return alerts;
 }
 
+// Build the "triggered conditions" alert box for a list of alerts
+function sbuAlertBox(alerts, tierLabel){
+  return `<div style="background:#fff7ed;border:1px solid #fed7aa;border-left:4px solid #f97316;border-radius:8px;padding:12px 14px;margin:10px 0"><div style="color:#9a3412;font-weight:700;font-size:13px;margin-bottom:6px">⚠ Triggered conditions (${tierLabel})</div><table style="border-collapse:collapse;width:100%;font-size:12.5px">${alerts.map(a=>`<tr><td style="padding:5px 8px;border-bottom:1px solid #fed7aa;font-weight:600;color:#ea580c">${a.type}</td><td style="padding:5px 8px;border-bottom:1px solid #fed7aa;color:#7c2d12">${a.msg}</td></tr>`).join('')}</table></div>`;
+}
+// Build a card (name + alerts + full report) for one SBU/plant inside a combined email
+function sbuCard(en, tierLabel){
+  const ab = en.alerts.length ? sbuAlertBox(en.alerts, tierLabel) : `<div style="color:#64748b;font-size:12px;margin:8px 0">No alert triggered</div>`;
+  return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:10px 0"><div style="font-weight:700;color:#0f766e;margin-bottom:4px">${en.name}${en.alerts.length?' <span style="color:#c0392b">(alerted)</span>':''}</div>${ab}${buildReportHTML(en.plant, en.key)}</div>`;
+}
+
 // Main: evaluate all SBUs, escalate, send. config = {emailConfig, state} ; sendFn(to,subject,html) async
 async function evaluateAll(live, emailConfig, state, sendFn) {
   const today = new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
   if (state.date !== today) { state.date = today; state.counts = {}; }
-  const sent = [], seen = [], deputyItems = [], aelAlerted = [];
+  const sent = [], seen = [], deputyItems = [], aelAlerted = [], mailGroups = new Map();
   for (const key of Object.keys(live.plants||{})) {
     const plant = live.plants[key];
     const alerts = evaluateSbu(key, plant);
@@ -190,21 +200,27 @@ async function evaluateAll(live, emailConfig, state, sendFn) {
     const sig = key+'|'+alerts.map(a=>a.type).join(',');
     if (seen.includes(sig)) continue; seen.push(sig);
     const tierLabel = tier==='plant_head'?'1st escalation (Plant Head)':(tier==='hob_ceo'?'2nd escalation (HOB/CEO)':'3rd escalation (Deputy COO)');
-    const alertBox = `<div style="background:#fff7ed;border:1px solid #fed7aa;border-left:4px solid #f97316;border-radius:8px;padding:12px 14px;margin:10px 0">
-      <div style="color:#9a3412;font-weight:700;font-size:13px;margin-bottom:6px">⚠ Triggered conditions (${tierLabel})</div>
-      <table style="border-collapse:collapse;width:100%;font-size:12.5px">${alerts.map(a=>`<tr><td style="padding:5px 8px;border-bottom:1px solid #fed7aa;font-weight:600;color:#ea580c">${a.type}</td><td style="padding:5px 8px;border-bottom:1px solid #fed7aa;color:#7c2d12">${a.msg}</td></tr>`).join('')}</table>
-    </div>`;
-    const body = alertBox + buildReportHTML(plant, key);
-    const html = wrapEmail(`${cfg.name||key} — Alert (${tierLabel})`, body);
-    if (tier === 'deputy') {
-      // collect for one combined Deputy COO mail (all SBUs)
-      deputyItems.push({ key, name: cfg.name||key, types: alerts.map(a=>a.type), html});
-      continue;
+    const en = { key, name: cfg.name||key, alerts, plant };
+    if (tier === 'deputy') { deputyItems.push({ ...en, html: wrapEmail(`${en.name} — Alert (${tierLabel})`, sbuCard(en, tierLabel)) }); continue; }
+    // Group by recipient email so an address shared by 2+ SBUs gets ONE combined mail
+    const recips = (tier === 'plant_head') ? (cfg.plant_head||[]) : (cfg.hob_ceo||[]);
+    if (!recips.length) continue;
+    for (const e of recips) {
+      const gk = String(e).toLowerCase()+'|'+tier;
+      let g = mailGroups.get(gk); if(!g){ g = { email:e, tier, tierLabel, entries:[] }; mailGroups.set(gk, g); }
+      g.entries.push(en);
     }
-    let to = (tier === 'plant_head') ? (cfg.plant_head||[]) : (cfg.hob_ceo||[]);
-    if (!to.length) continue;
-    try { await sendFn(to, `🚨 ALERT ${cfg.name||key} — ${alerts.map(a=>a.type).join(', ')}`, html); sent.push({ key, tier, to, types: alerts.map(a=>a.type) }); }
-    catch(e){ sent.push({ key, tier, to, error: e.message }); }
+  }
+  // Send ONE email per unique recipient (dedup: an address used by 2+ SBUs -> single combined mail)
+  for (const g of mailGroups.values()) {
+    const multi = g.entries.length > 1;
+    const names = g.entries.map(e=>e.name);
+    const types = g.entries.flatMap(e=>e.alerts.map(a=>a.type));
+    const body = g.entries.map(e=>sbuCard(e, g.tierLabel)).join('');
+    const title = multi ? `${names.join(' + ')} — Alert (${g.tierLabel})` : `${names[0]} — Alert (${g.tierLabel})`;
+    const subject = multi ? `🚨 ALERT — ${names.join(', ')} (${g.tierLabel})` : `🚨 ALERT ${names[0]} — ${types.join(', ')}`;
+    try { await sendFn([g.email], subject, wrapEmail(title, body)); sent.push({ key: multi?('multi:'+names.join(',')):g.entries[0].key, tier:g.tier, to:[g.email], types }); }
+    catch(e){ sent.push({ key:'multi', tier:g.tier, to:[g.email], error:e.message }); }
   }
   // Combined AEL alert email — ONE email covering all 3 AEL plants when any triggers (Plant Head → HOB/CEO → Deputy)
   if (aelAlerted.length) {
@@ -219,10 +235,7 @@ async function evaluateAll(live, emailConfig, state, sendFn) {
       const pl = live.plants[k];
       const cfg = emailConfig[k] || {};
       const al = (aelAlerted.find(x=>x.key===k)||{}).alerts || [];
-      const alertBox = al.length
-        ? `<div style="background:#fff7ed;border:1px solid #fed7aa;border-left:4px solid #f97316;border-radius:8px;padding:12px 14px;margin:10px 0"><div style="color:#9a3412;font-weight:700;font-size:13px;margin-bottom:6px">⚠ Triggered conditions</div><table style="border-collapse:collapse;width:100%;font-size:12.5px">${al.map(a=>`<tr><td style="padding:5px 8px;border-bottom:1px solid #fed7aa;font-weight:600;color:#ea580c">${a.type}</td><td style="padding:5px 8px;border-bottom:1px solid #fed7aa;color:#7c2d12">${a.msg}</td></tr>`).join('')}</table></div>`
-        : `<div style="color:#64748b;font-size:12px;margin:8px 0">No alert triggered</div>`;
-      return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:10px 0"><div style="font-weight:700;color:#0f766e;margin-bottom:4px">${cfg.name||k} ${triggeredKeys.includes(k)?'<span style="color:#c0392b">(alerted)</span>':''}</div>${alertBox}${buildReportHTML(pl, k)}</div>`;
+      return sbuCard({ key:k, name: cfg.name||k, alerts: al, plant: pl }, tierLabel);
     }).join('');
     const header = `<div style="font-size:13px;color:#334155;margin-bottom:6px">AEL (Akij Essentials) combined alert on <b>${today}</b> — ${triggeredKeys.length} of ${AEL_PLANTS.length} plant(s) triggered. Each section shows all 3 AEL plants.</div>`;
     const to = tier === 'plant_head' ? (aelCfg.plant_head||[]) : (tier === 'hob_ceo' ? (aelCfg.hob_ceo||[]) : [emailConfig._deputy || 'deputy.coo@akijresource.com']);
@@ -231,9 +244,12 @@ async function evaluateAll(live, emailConfig, state, sendFn) {
       catch(e){ sent.push({ key:'AEL', tier, to, error: e.message }); }
     }
   }
-  // Combined Deputy COO mail — one mail for ALL SBUs (each SBU's alert + report)
+  // Combined Deputy COO mail — one mail for ALL SBUs (each SBU's alert + report), to deputy + additional recipients
   if (deputyItems.length) {
-    const depTo = [emailConfig._deputy || 'deputy.coo@akijresource.com'];
+    const depSet = new Set();
+    depSet.add(String(emailConfig._deputy || 'deputy.coo@akijresource.com').toLowerCase().trim());
+    (emailConfig._additional||[]).forEach(e=>{ if(e) depSet.add(String(e).toLowerCase().trim()); });
+    const depTo = [...depSet];
     const body = deputyItems.map(i=>{
       // i.html already has the full wrapped structure; reuse the inner alert+report by extracting between header and footer is fragile,
       // so rebuild a compact combined card per SBU using the stored html.
@@ -251,7 +267,10 @@ async function evaluateAll(live, emailConfig, state, sendFn) {
 // mode='deputy' builds the combined Deputy-COO report (all SBUs, each with alert + full report) in one mail
 async function sendTestMail(live, emailConfig, to, sendFn, sbuOrAll, mode) {
   const today = new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
-  const keys = (sbuOrAll && live.plants && live.plants[sbuOrAll]) ? [sbuOrAll] : Object.keys(live.plants||{});
+  const isAelCombined = sbuOrAll === 'ael';
+  const keys = isAelCombined
+    ? AEL_PLANTS.filter(k=>live.plants && live.plants[k])
+    : ((sbuOrAll && live.plants && live.plants[sbuOrAll]) ? [sbuOrAll] : Object.keys(live.plants||{}));
   const body = keys.map(key=>{
     const plant=live.plants[key];
     const cfg=(emailConfig&&emailConfig[key])||{};
@@ -259,17 +278,21 @@ async function sendTestMail(live, emailConfig, to, sendFn, sbuOrAll, mode) {
     const alertBox = alerts.length?`<div style="background:#fff7ed;border:1px solid #fed7aa;border-left:4px solid #f97316;border-radius:8px;padding:10px 12px;margin:8px 0"><b style="color:#9a3412">⚠ ${alerts.map(a=>a.type).join(', ')}</b> — <span style="color:#7c2d12">${alerts.map(a=>a.msg).join(' · ')}</span></div>`:'';
     return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:10px 0"><div style="font-weight:700;color:#0f766e;margin-bottom:4px">${cfg.name||key}</div>${alertBox}${buildReportHTML(plant, key)}</div>`;
   }).join('');
-  const isSingle = keys.length===1;
+  const isSingle = keys.length===1 && !isAelCombined;
   const isDeputy = mode==='deputy';
-  const header = isDeputy
-    ? `<div style="font-size:13px;color:#334155;margin-bottom:6px">Combined Deputy COO report — performance across <b>${keys.length}</b> SBU(s) on <b>${today}</b>. Each section is a full dashboard report.</div>`
-    : `<div style="font-size:13px;color:#334155;margin-bottom:6px">Test email — full dashboard report. Generated <b>${today}</b>.</div>`;
-  const subject = isDeputy
-    ? `⚡ DEPUTY COO COMBINED REPORT — ${keys.length} SBU(s) (TEST ${today})`
-    : `📊 Akij Dashboard Report (TEST) — ${isSingle?(cfgName(live,keys[0],emailConfig)):'All SBUs'} · ${today}`;
+  const header = isAelCombined
+    ? `<div style="font-size:13px;color:#334155;margin-bottom:6px">Akij Essentials (AEL) combined report — <b>${keys.length}</b> plant(s) (Flour / Mohadevpur / Daal) on <b>${today}</b>. Each section is a full dashboard report.</div>`
+    : (isDeputy
+      ? `<div style="font-size:13px;color:#334155;margin-bottom:6px">Combined Deputy COO report — performance across <b>${keys.length}</b> SBU(s) on <b>${today}</b>. Each section is a full dashboard report.</div>`
+      : `<div style="font-size:13px;color:#334155;margin-bottom:6px">Test email — full dashboard report. Generated <b>${today}</b>.</div>`);
+  const subject = isAelCombined
+    ? `📊 AEL Combined Report (TEST) — ${keys.length} plant(s) · ${today}`
+    : (isDeputy
+      ? `⚡ DEPUTY COO COMBINED REPORT — ${keys.length} SBU(s) (TEST ${today})`
+      : `📊 Akij Dashboard Report (TEST) — ${isSingle?(cfgName(live,keys[0],emailConfig)):'All SBUs'} · ${today}`);
   const html = wrapEmail(subject, header + body);
   await sendFn([to], subject, html);
-  return { to, sent: true, date: today, sbu: isSingle?keys[0]:'ALL', mode: isDeputy?'deputy':'all' };
+  return { to, sent: true, date: today, sbu: isAelCombined?'AEL':(isSingle?keys[0]:'ALL'), mode: isAelCombined?'ael':(isDeputy?'deputy':'all') };
 }
 function cfgName(live, key, cfg){ return (cfg&&cfg[key]&&cfg[key].name)||key; }
 
@@ -283,6 +306,7 @@ function collectRecipients(emailConfig){
     (c.hob_ceo||[]).forEach(e=>{ if(e) set.add(String(e).toLowerCase().trim()); });
   }
   if (emailConfig && emailConfig._deputy) set.add(String(emailConfig._deputy).toLowerCase().trim());
+  (emailConfig && emailConfig._additional || []).forEach(e=>{ if(e) set.add(String(e).toLowerCase().trim()); });
   return [...set];
 }
 

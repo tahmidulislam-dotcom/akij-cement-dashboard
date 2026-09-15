@@ -246,6 +246,14 @@ tr:last-child td{border-bottom:none}
     <div style="overflow-x:auto;margin:10px 0"><table id="alertEmailTable"><thead>
       <tr><th>SBU</th><th>Plant Head (1st)</th><th>HOB / CEO (2nd)</th><th>Deputy COO (3rd+)</th></tr>
     </thead><tbody></tbody></table></div>
+    <div style="margin:12px 0;padding:12px;background:rgba(45,212,191,.05);border:1px solid var(--line);border-radius:10px">
+      <label style="font-weight:700;color:var(--accent);font-size:12.5px">📬 Additional Recipients — also receive the combined Deputy COO mail (comma-separated):</label>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <input id="additionalEmails" type="text" placeholder="email1@akij.com, email2@akij.com" style="flex:1;min-width:260px;background:#0b1220;color:#cdd7ea;border:1px solid #233048;border-radius:8px;padding:8px 10px;font-size:12px">
+        <button class="btn" onclick="saveAdditionalEmails()" style="padding:8px 12px;font-size:11.5px">💾 Save Additional</button>
+      </div>
+      <div class="note" id="additionalEmailsNote" style="margin-top:6px">Loading…</div>
+    </div>
     <div class="em-row" style="margin-top:12px">
       <span id="alertToggleBadge" class="badge b-green" style="margin-right:6px">● ON</span>
       <button class="btn" id="btnAlertStop" onclick="setAlertEnabled(false)">⏹ Stop Alerts</button>
@@ -1167,7 +1175,7 @@ function setAlertEnabled(enabled){
 }
 function loadAlertEmails(){
   fetch(`${API}/api/alert-emails`).then(r=>r.json()).then(d=>{
-    alertCfg=d.config||{}; alertsEnabled = d.alertsEnabled!==false; renderAlertToggle(); renderAlertTable();
+    alertCfg=d.config||{}; alertsEnabled = d.alertsEnabled!==false; renderAlertToggle(); renderAlertTable(); renderAdditionalEmails();
     if($('alertEmailsNote')) $('alertEmailsNote').textContent=`Recipients loaded · escalation state: count=${Object.keys(d.state&&d.state.counts||{}).length} SBU `;
   }).catch(e=>{ if($('alertEmailsNote')) $('alertEmailsNote').textContent='Failed to load alert recipients: '+e.message; });
 }
@@ -1201,6 +1209,21 @@ function saveAlertEmails(){
   for(const k of order){ const e=$('ph_'+k)||$('hc_'+k)||$('dep_'+k); if(!e) continue; cfg[k]=cfg[k]||{}; if($('ph_'+k)) cfg[k].plant_head=split($('ph_'+k).value); if($('hc_'+k)) cfg[k].hob_ceo=split($('hc_'+k).value); cfg._deputy = $('dep_'+k)?$('dep_'+k).value.trim():cfg._deputy; }
   fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})}).then(r=>r.json()).then(d=>{
     alertCfg=d.config||cfg; alertEditOn=false; renderAlertTable(); alertStatus('Saved ✔','ok');
+  }).catch(e=>alertStatus('Save failed: '+e.message,'err'));
+}
+function renderAdditionalEmails(){
+  const inp=$('additionalEmails'); if(!inp) return;
+  const add=(alertCfg&&alertCfg._additional)||[];
+  inp.value = (Array.isArray(add)?add:[]).join(', ');
+  if($('additionalEmailsNote')) $('additionalEmailsNote').textContent = add.length ? `${add.length} additional recipient(s)` : 'No additional recipients yet';
+}
+function saveAdditionalEmails(){
+  if(!alertCfg){ alertStatus('No config','err'); return; }
+  const cfg=JSON.parse(JSON.stringify(alertCfg));
+  const split=s=>String(s).split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
+  cfg._additional = split($('additionalEmails').value);
+  fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})}).then(r=>r.json()).then(d=>{
+    alertCfg=d.config||cfg; renderAdditionalEmails(); alertStatus('Additional recipients saved ✔','ok');
   }).catch(e=>alertStatus('Save failed: '+e.message,'err'));
 }
 function runAlertCheck(){
