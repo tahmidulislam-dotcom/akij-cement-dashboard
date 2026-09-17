@@ -927,7 +927,7 @@ function render(){
     {l:'Waste', v:(_wasteSum>0?fmt(_wasteSum,1):'—'), s:'Summed across all machines', ac:'var(--red)'},
     ...((P.fiveS || P.kaizen)? [
       {l:'5S Score', v:(P.fiveS&&P.fiveS.todayValue!=null?fmt(P.fiveS.todayValue,1)+'%':'—'), s:(P.fiveS&&P.fiveS.todayValue!=null?(progBar(P.fiveS.todayValue,70,'Target 70%')+`<div style="color:var(--mut);font-size:10px;margin-top:2px">Latest ${P.fiveS.latestDate||''} · ${P.fiveS.count} audit(s) · Google 5S form</div>`):'No 5S data'), ac:'var(--purple)'},
-      {l:'Kaizen (MTD)', v:(P.kaizen&&P.kaizen.mtdCount!=null?fmt(P.kaizen.mtdCount,0):'—'), s:(P.kaizen&&P.kaizen.mtdCount!=null?(progBar(P.kaizen.mtdCount,10,'Target 10')+`<div style="color:var(--mut);font-size:10px;margin-top:2px">${P.kaizen.month} · ${P.kaizen.total} total · IC card</div>`):'No Kaizen data'), ac:'var(--amber)'},
+      {l:'Kaizen', v:(P.kaizen&&P.kaizen.count!=null?fmt(P.kaizen.count,0):'—'), s:(P.kaizen&&P.kaizen.count!=null?(progBar(P.kaizen.count,10,'Target 10')+`<div style="color:var(--mut);font-size:10px;margin-top:2px">${(P.kaizen.from&&P.kaizen.to)?(P.kaizen.from+' → '+P.kaizen.to):(P.kaizen.month||'')} · ${P.kaizen.total} total · IC card (Created Date)</div>`):'No Kaizen data'), ac:'var(--amber)'},
     ] : []),
   ];
   $('kpiGrid').innerHTML = kpis.map(k=>`<div class="kpi" style="--ac:${k.ac}"><div class="lbl">${k.l}</div><div class="val">${k.v}</div><div class="sub">${k.s||''}</div></div>`).join('');

@@ -585,10 +585,9 @@ const server = http.createServer(async (req, res) => {
       // Merge latest available live date into the snapshot so maxDate/daily are current
       if(mergeLive){
         try{
-          const pool=await getMssqlPool();
-          const Q=async q=> (await pool.request().query(q)).recordset;
-          // latest date <= today across all plants
-          const mx=await Q(`SELECT CONVERT(varchar(10), MAX(dteProductionDate), 23) mx FROM mes.tblOeeProdWasteHeaderArc WHERE ISNULL(isActive,1)=1 AND dteProductionDate <= GETDATE()`);
+          const nv=x=>+String(x==null?0:x).replace(/,/g,'');
+          // latest date <= today across all plants (iBOSDDD via ARL MCP — no DWH dependency)
+          const mx=await ibosQuery(`SELECT CONVERT(varchar(10), MAX(dteProductionDate), 23) mx FROM mes.tblOeeProdWasteHeader WHERE ISNULL(isActive,1)=1 AND dteProductionDate <= GETDATE()`);
           const latestDate=(mx[0]&&mx[0].mx);
           const baseMax=live.plants?.[live.order?.[0]]?.meta?.maxDate;
           await applyMOHFromTable();
@@ -609,50 +608,40 @@ const server = http.createServer(async (req, res) => {
               const pin=plantIn(P);
               if(P.plants.length){
                 // OEE daily
-                const rows = await Q(`SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numLoadingMinute,0)) l, SUM(ISNULL(NumMachineRuntime,0)) r, SUM(ISNULL(numActualOutputQuantity,0)) a, SUM(ISNULL(numGoodOutputQuantity,0)) g, SUM(ISNULL(numCapacityPerHr,0) * ISNULL(NumMachineRuntime,0) / 60.0) cr, SUM(ISNULL(numCapacityPerHr,0) * ISNULL(numShiftDurationMinute,0) / 60.0) cs FROM mes.tblOeeProdWasteHeaderArc WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND ${pin} AND dteProductionDate > '${snapMax}' AND dteProductionDate <= GETDATE() GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName))`);
+                const rows = await ibosQuery(`SELECT CONVERT(varchar(10), dteProductionDate, 23) d, LTRIM(RTRIM(strUOMName)) u, SUM(ISNULL(numLoadingMinute,0)) l, SUM(ISNULL(NumMachineRuntime,0)) r, SUM(ISNULL(numActualOutputQuantity,0)) a, SUM(ISNULL(numGoodOutputQuantity,0)) g, SUM(ISNULL(numCapacityPerHr,0) * ISNULL(NumMachineRuntime,0) / 60.0) cr, SUM(ISNULL(numCapacityPerHr,0) * ISNULL(numShiftDurationMinute,0) / 60.0) cs FROM mes.tblOeeProdWasteHeader WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND ${pin} AND dteProductionDate > '${snapMax}' AND dteProductionDate <= GETDATE() GROUP BY CONVERT(varchar(10), dteProductionDate, 23), LTRIM(RTRIM(strUOMName))`, 200);
                 if(rows.length){
                   target.daily=target.daily||[];
                   const existing=new Map(target.daily.map(x=>[(x.d+'|'+x.u),x]));
                   rows.forEach(r=>{
-                    const row={d:r.d,u:(r.u||'Unit').replace(/\s+/g,''),l:Math.round(r.l),r:Math.round(r.r),a:Math.round(r.a*100)/100,g:Math.round(r.g*100)/100,cr:Math.round(r.cr*100)/100,cs:Math.round(r.cs*100)/100};
+                    const row={d:r.d,u:(r.u||'Unit').replace(/\s+/g,''),l:Math.round(nv(r.l)),r:Math.round(nv(r.r)),a:Math.round(nv(r.a)*100)/100,g:Math.round(nv(r.g)*100)/100,cr:Math.round(nv(r.cr)*100)/100,cs:Math.round(nv(r.cs)*100)/100};
                     existing.set(row.d+'|'+row.u,row);
                   });
                   target.daily=[...existing.values()].sort((a,b)=>a.d<b.d?-1:1);
                 }
                 // NPT categories by day
-                const nptRows = await Q(`SELECT CONVERT(varchar(10), h.dteLossTimeDate,23) d, LTRIM(RTRIM(ISNULL(r.strCategoryName,'Others'))) c, SUM(ISNULL(r.intLossTimeInMinutes,0)) m, COUNT(*) e FROM mes.tblNPTRowArc r JOIN mes.tblNPTHeaderArc h ON h.intNPTId=r.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND r.isActive=1 AND ${plantIn(P,'h.strPlantName')} AND h.dteLossTimeDate > '${nptMax}' AND h.dteLossTimeDate <= GETDATE() GROUP BY CONVERT(varchar(10), h.dteLossTimeDate,23), LTRIM(RTRIM(ISNULL(r.strCategoryName,'Others')))`);
+                const nptRows = await ibosQuery(`SELECT CONVERT(varchar(10), h.dteLossTimeDate,23) d, LTRIM(RTRIM(ISNULL(r.strCategoryName,'Others'))) c, SUM(ISNULL(r.intLossTimeInMinutes,0)) m, COUNT(*) e FROM mes.tblNPTRow r JOIN mes.tblNPTHeader h ON h.intNPTId=r.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND r.isActive=1 AND ${plantIn(P,'h.strPlantName')} AND h.dteLossTimeDate > '${nptMax}' AND h.dteLossTimeDate <= GETDATE() GROUP BY CONVERT(varchar(10), h.dteLossTimeDate,23), LTRIM(RTRIM(ISNULL(r.strCategoryName,'Others')))`, 200);
                 if(nptRows.length){
                   target.nptCat=target.nptCat||[];
                   const nk=new Map(target.nptCat.map(x=>[(x.d+'|'+x.c),x]));
-                  nptRows.forEach(r=>{ const row={d:r.d,c:r.c,m:Math.round(r.m),e:r.e}; nk.set(row.d+'|'+row.c,row); });
+                  nptRows.forEach(r=>{ const row={d:r.d,c:r.c,m:Math.round(nv(r.m)),e:nv(r.e)}; nk.set(row.d+'|'+row.c,row); });
                   target.nptCat=[...nk.values()].sort((a,b)=>a.d<b.d?-1:1);
                 }
                 // NPT breakdowns (Mech+Elec)
-                const bdRows = await Q(`SELECT CONVERT(varchar(10), h.dteLossTimeDate,23) d, LTRIM(RTRIM(ISNULL(r.strCategoryName,''))) c, LTRIM(RTRIM(ISNULL(r.strSubCategoryName,''))) s, SUM(ISNULL(r.intLossTimeInMinutes,0)) m, COUNT(*) e FROM mes.tblNPTRowArc r JOIN mes.tblNPTHeaderArc h ON h.intNPTId=r.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND r.isActive=1 AND r.strCategoryName IN ('Mechanical','Electrical') AND ${plantIn(P,'h.strPlantName')} AND h.dteLossTimeDate > '${bdMax}' AND h.dteLossTimeDate <= GETDATE() GROUP BY CONVERT(varchar(10), h.dteLossTimeDate,23), LTRIM(RTRIM(ISNULL(r.strCategoryName,''))), LTRIM(RTRIM(ISNULL(r.strSubCategoryName,'')))`);
+                const bdRows = await ibosQuery(`SELECT CONVERT(varchar(10), h.dteLossTimeDate,23) d, LTRIM(RTRIM(ISNULL(r.strCategoryName,''))) c, LTRIM(RTRIM(ISNULL(r.strSubCategoryName,''))) s, SUM(ISNULL(r.intLossTimeInMinutes,0)) m, COUNT(*) e FROM mes.tblNPTRow r JOIN mes.tblNPTHeader h ON h.intNPTId=r.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND r.isActive=1 AND r.strCategoryName IN ('Mechanical','Electrical') AND ${plantIn(P,'h.strPlantName')} AND h.dteLossTimeDate > '${bdMax}' AND h.dteLossTimeDate <= GETDATE() GROUP BY CONVERT(varchar(10), h.dteLossTimeDate,23), LTRIM(RTRIM(ISNULL(r.strCategoryName,''))), LTRIM(RTRIM(ISNULL(r.strSubCategoryName,'')))`, 200);
                 if(bdRows.length){
                   target.nptBd=target.nptBd||[];
                   const bk=new Map(target.nptBd.map(x=>[(x.d+'|'+x.c+'|'+(x.s||'')),x]));
-                  bdRows.forEach(r=>{ const row={d:r.d,c:r.c,s:r.s,m:Math.round(r.m),e:r.e}; bk.set(row.d+'|'+row.c+'|'+(row.s||''),row); });
+                  bdRows.forEach(r=>{ const row={d:r.d,c:r.c,s:r.s,m:Math.round(nv(r.m)),e:nv(r.e)}; bk.set(row.d+'|'+row.c+'|'+(row.s||''),row); });
                   target.nptBd=[...bk.values()].sort((a,b)=>a.d<b.d?-1:1);
                 }
               }
-              // Overtime (BU-level, not plant-filtered)
-              try{
-                const otRows = await Q(`SELECT CONVERT(varchar(10), dteOverTimeDate,23) d, ROUND(SUM(ISNULL(numOverTimeHour,0)),2) h, COUNT(*) e FROM saas.timeEmpOverTimeArc WHERE intBusinessUnitId=${P.bu} AND ISNULL(isActive,1)=1 AND ISNULL(isReject,0)=0 AND dteOverTimeDate > '${otMax}' AND dteOverTimeDate <= GETDATE() GROUP BY CONVERT(varchar(10), dteOverTimeDate,23)`);
-                if(otRows.length){
-                  target.ot=target.ot||[];
-                  const ok=new Map(target.ot.map(x=>[x.d,x]));
-                  otRows.forEach(r=>{ const row={d:r.d,h:+r.h,e:r.e}; ok.set(row.d,row); });
-                  target.ot=[...ok.values()].sort((a,b)=>a.d<b.d?-1:1);
-                }
-              }catch{}
               // MOH per-day (BU-level)
               try{
-                const mohRows = await Q(`SELECT CONVERT(varchar(10), po.dteStartDate,23) d, SUM(ISNULL(pr.numOverheadCost,0)) c FROM mes.tblProductionRowArc pr JOIN mes.tblProductionOrderArc po ON po.intProductionOrderId=pr.intProductionOrderId WHERE po.intBusinessUnitId=${P.bu} AND pr.isActive=1 AND po.dteStartDate > '${snapMax}' AND po.dteStartDate <= GETDATE() GROUP BY CONVERT(varchar(10), po.dteStartDate,23)`);
+                const mohRows = await ibosQuery(`SELECT CONVERT(varchar(10), po.dteStartDate,23) d, SUM(ISNULL(pr.numOverheadCost,0)) c FROM mes.tblProductionRow pr JOIN mes.tblProductionOrder po ON po.intProductionOrderId=pr.intProductionOrderId WHERE po.intBusinessUnitId=${P.bu} AND pr.isActive=1 AND po.dteStartDate > '${snapMax}' AND po.dteStartDate <= GETDATE() GROUP BY CONVERT(varchar(10), po.dteStartDate,23)`, 200);
                 if(mohRows.length){
                   target.mohDaily=target.mohDaily||[];
                   const mk=new Map(target.mohDaily.map(x=>[x.d,x]));
-                  mohRows.forEach(r=>{ const row={d:r.d,c:Math.round(r.c*100)/100}; mk.set(row.d,row); });
+                  mohRows.forEach(r=>{ const row={d:r.d,c:Math.round(nv(r.c)*100)/100}; mk.set(row.d,row); });
                   target.mohDaily=[...mk.values()].sort((a,b)=>a.d<b.d?-1:1);
                 }
               }catch{}
@@ -821,22 +810,28 @@ const server = http.createServer(async (req, res) => {
             for(const P of PLANTS_LIVE){
               const tgt=live.plants?.[P.key]; if(!tgt) continue; if(focus && P.key!==focus) continue;
               try{
-                const rows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, LTRIM(RTRIM(h.strUOMName)) u, CONVERT(varchar(10),h.dteProductionDate,23) d,
+                const rows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, LTRIM(RTRIM(h.strUOMName)) u,
                   SUM(ISNULL(h.numActualOutputQuantity,0)) actual, SUM(ISNULL(h.numGoodOutputQuantity,0)) good, SUM(ISNULL(h.numShiftTargetQuantity,0)) target,
                   SUM(ISNULL(h.numAvailableMinute,0)) Av, SUM(ISNULL(h.numShiftDurationMinute,0)) Dur, SUM(ISNULL(h.numPlannedDowntimeMin,0)) Pln,
                   SUM(ISNULL(h.numCapacityPerHr,0)*ISNULL(h.numShiftDurationMinute,0)/60.0) cap, SUM(ISNULL(h.numSMVCycleTime,0)*ISNULL(h.numActualOutputQuantity,0)) smv,
                   SUM(ISNULL(h.numNptLossTimeInMinutes,0)) npt, SUM(ISNULL(h.numWastageTargetQuantity,0)) wastTgt,
                   SUM(ISNULL(h.numActualRPM,0)) actRPM, SUM(ISNULL(h.numStandardRPM,0)) stdRPM
                   FROM mes.tblOeeProdWasteHeader h WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ${pfIn(P,'h.strPlantName')} AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}'
-                  GROUP BY h.strMachineName, LTRIM(RTRIM(h.strUOMName)), CONVERT(varchar(10),h.dteProductionDate,23)`, 200);
-                const wRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 AND ${pfIn(P,'h.strPlantName')} AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}' GROUP BY h.strMachineName, CONVERT(varchar(10),h.dteProductionDate,23)`, 200);
-                const wasteBy={}; wRows.forEach(r=>{ wasteBy[r.m+'|'+r.d]=mNv(r.waste); });
+                  GROUP BY h.strMachineName, LTRIM(RTRIM(h.strUOMName))`, 200);
+                const wRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, SUM(ISNULL(r.numWasteQuantity,0)) waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 AND ${pfIn(P,'h.strPlantName')} AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}' GROUP BY h.strMachineName`, 200);
+                const wasteBy={}; wRows.forEach(r=>{ wasteBy[r.m]=mNv(r.waste); });
                 const nptRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strWrokCenterName)) m, SUM(ISNULL(r.intLossTimeInMinutes,0)) nptLoss, COUNT(*) bdCount FROM mes.tblNPTHeader h WITH (NOLOCK) JOIN mes.tblNPTRow r WITH (NOLOCK) ON r.intNPTId=h.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ISNULL(r.isActive,1)=1 AND r.intCategoryId IN (456,457) AND h.dteLossTimeDate >= '${dFrom}' AND h.dteLossTimeDate <= '${dTo}' GROUP BY LTRIM(RTRIM(h.strWrokCenterName))`, 200);
                 const nptBy={}; nptRows.forEach(r=>{ nptBy[r.m]={nptLoss:mNv(r.nptLoss),bdCount:mNv(r.bdCount)}; });
                 tgt.machAll=rows.map(r=>{
                   const nb=nptBy[r.m]||{nptLoss:0,bdCount:0};
-                  return {m:r.m,u:r.u,d:r.d,actual:mNv(r.actual),good:mNv(r.good),target:mNv(r.target),Av:mNv(r.Av),Dur:mNv(r.Dur),Pln:mNv(r.Pln),cap:mNv(r.cap),smv:mNv(r.smv),npt:mNv(r.npt),wastTgt:mNv(r.wastTgt),waste:wasteBy[r.m+'|'+r.d]||0,actRPM:mNv(r.actRPM),stdRPM:mNv(r.stdRPM),nptLoss:nb.nptLoss,bdCount:nb.bdCount};
+                  return {m:r.m,u:r.u,d:dTo,actual:mNv(r.actual),good:mNv(r.good),target:mNv(r.target),Av:mNv(r.Av),Dur:mNv(r.Dur),Pln:mNv(r.Pln),cap:mNv(r.cap),smv:mNv(r.smv),npt:mNv(r.npt),wastTgt:mNv(r.wastTgt),waste:wasteBy[r.m]||0,actRPM:mNv(r.actRPM),stdRPM:mNv(r.stdRPM),nptLoss:nb.nptLoss,bdCount:nb.bdCount};
                 });
+                // Latest-day per-machine (for the alert email's "today" production numbers)
+                try{
+                  const md=(tgt.meta&&tgt.meta.maxDate)||dTo;
+                  const tRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, LTRIM(RTRIM(h.strUOMName)) u, SUM(ISNULL(h.numActualOutputQuantity,0)) actual, SUM(ISNULL(h.numGoodOutputQuantity,0)) good, SUM(ISNULL(h.numShiftTargetQuantity,0)) target, SUM(ISNULL(h.numCapacityPerHr,0)*ISNULL(h.numShiftDurationMinute,0)/60.0) cap FROM mes.tblOeeProdWasteHeader h WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ${pfIn(P,'h.strPlantName')} AND h.dteProductionDate='${md}' GROUP BY h.strMachineName, LTRIM(RTRIM(h.strUOMName))`, 200);
+                  tgt.machToday=tRows.map(r=>({m:r.m,u:r.u,d:md,actual:mNv(r.actual),good:mNv(r.good),target:mNv(r.target),cap:mNv(r.cap)}));
+                }catch(e){ tgt.machToday=[]; }
               }catch(e){ console.error('  machAll '+P.key+' failed', e.message); tgt.machAll=[]; }
             }
           }catch(e){ console.error('machAll failed', e.message); }

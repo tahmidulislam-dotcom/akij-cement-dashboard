@@ -87,9 +87,11 @@ async function injectMOH(live, focus) {
 
 // Machine-filtered Actual + Target output (per date + UoM) from mes.tblOeeProdWasteHeader.
 // ACCL -> VRM1+2, APFIL -> Loom, AIL -> Rolling; others -> all machines. Stored per date for range summing.
-async function injectProductTargets(live, focus) {
+async function injectProductTargets(live, focus, from, to) {
   try {
     const normU = n => String(n||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const dFrom = from || new Date(Date.now()-12*864e5).toISOString().slice(0,10);
+    const dTo = to || new Date().toISOString().slice(0,10);
     for (const P of PLANTS) {
       const t = live.plants?.[P.key]; if (!t) continue; if (focus && P.key!==focus) continue;
       const mf = MACHINE_FILTER[P.key] ? ` AND ${MACHINE_FILTER[P.key]}` : '';
@@ -108,16 +110,23 @@ async function injectProductTargets(live, focus) {
       // Per-machine actual/good/target + full OEE/Loss summary (for the machine summary report)
       try{
         const maRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
-          `SELECT LTRIM(RTRIM(h.strMachineName)) m, LTRIM(RTRIM(h.strUOMName)) u, CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(h.numActualOutputQuantity,0)) actual, SUM(ISNULL(h.numGoodOutputQuantity,0)) good, SUM(ISNULL(h.numShiftTargetQuantity,0)) target, SUM(ISNULL(h.numCapacityPerHr,0)*ISNULL(h.numShiftDurationMinute,0)/60.0) cap, SUM(ISNULL(h.numAvailableMinute,0)) Av, SUM(ISNULL(h.numShiftDurationMinute,0)) Dur, SUM(ISNULL(h.numPlannedDowntimeMin,0)) Pln, SUM(ISNULL(h.numSMVCycleTime,0)*ISNULL(h.numActualOutputQuantity,0)) smv, SUM(ISNULL(h.numNptLossTimeInMinutes,0)) npt, SUM(ISNULL(h.numWastageTargetQuantity,0)) wastTgt, SUM(ISNULL(h.numActualRPM,0)) actRPM, SUM(ISNULL(h.numStandardRPM,0)) stdRPM FROM mes.tblOeeProdWasteHeader h WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ${plantIn(P,'h.strPlantName')} AND h.dteProductionDate >= DATEADD(day,-12,GETDATE()) GROUP BY h.strMachineName, LTRIM(RTRIM(h.strUOMName)), CONVERT(varchar(10),h.dteProductionDate,23) ORDER BY d DESC`, limit:800});
+          `SELECT LTRIM(RTRIM(h.strMachineName)) m, LTRIM(RTRIM(h.strUOMName)) u, SUM(ISNULL(h.numActualOutputQuantity,0)) actual, SUM(ISNULL(h.numGoodOutputQuantity,0)) good, SUM(ISNULL(h.numShiftTargetQuantity,0)) target, SUM(ISNULL(h.numCapacityPerHr,0)*ISNULL(h.numShiftDurationMinute,0)/60.0) cap, SUM(ISNULL(h.numAvailableMinute,0)) Av, SUM(ISNULL(h.numShiftDurationMinute,0)) Dur, SUM(ISNULL(h.numPlannedDowntimeMin,0)) Pln, SUM(ISNULL(h.numSMVCycleTime,0)*ISNULL(h.numActualOutputQuantity,0)) smv, SUM(ISNULL(h.numNptLossTimeInMinutes,0)) npt, SUM(ISNULL(h.numWastageTargetQuantity,0)) wastTgt, SUM(ISNULL(h.numActualRPM,0)) actRPM, SUM(ISNULL(h.numStandardRPM,0)) stdRPM FROM mes.tblOeeProdWasteHeader h WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ${plantIn(P,'h.strPlantName')} AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}' GROUP BY h.strMachineName, LTRIM(RTRIM(h.strUOMName))`, limit:800});
         const wasteRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
-          `SELECT LTRIM(RTRIM(h.strMachineName)) m, CONVERT(varchar(10),h.dteProductionDate,23) d, SUM(ISNULL(r.numWasteQuantity,0)) waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 AND ${plantIn(P,'h.strPlantName')} AND h.dteProductionDate >= DATEADD(day,-12,GETDATE()) GROUP BY h.strMachineName, CONVERT(varchar(10),h.dteProductionDate,23)`, limit:800});
+          `SELECT LTRIM(RTRIM(h.strMachineName)) m, SUM(ISNULL(r.numWasteQuantity,0)) waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 AND ${plantIn(P,'h.strPlantName')} AND h.dteProductionDate >= '${dFrom}' AND h.dteProductionDate <= '${dTo}' GROUP BY h.strMachineName`, limit:800});
         const nptRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
-          `SELECT LTRIM(RTRIM(h.strWrokCenterName)) m, SUM(ISNULL(r.intLossTimeInMinutes,0)) nptLoss, COUNT(*) bdCount FROM mes.tblNPTHeader h WITH (NOLOCK) JOIN mes.tblNPTRow r WITH (NOLOCK) ON r.intNPTId=h.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ISNULL(r.isActive,1)=1 AND r.intCategoryId IN (456,457) AND h.dteLossTimeDate >= DATEADD(day,-12,GETDATE()) GROUP BY LTRIM(RTRIM(h.strWrokCenterName))`, limit:800});
+          `SELECT LTRIM(RTRIM(h.strWrokCenterName)) m, SUM(ISNULL(r.intLossTimeInMinutes,0)) nptLoss, COUNT(*) bdCount FROM mes.tblNPTHeader h WITH (NOLOCK) JOIN mes.tblNPTRow r WITH (NOLOCK) ON r.intNPTId=h.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ISNULL(r.isActive,1)=1 AND r.intCategoryId IN (456,457) AND h.dteLossTimeDate >= '${dFrom}' AND h.dteLossTimeDate <= '${dTo}' GROUP BY LTRIM(RTRIM(h.strWrokCenterName))`, limit:800});
         const nv=x=>+String(x==null?0:x).replace(/,/g,'');
-        const wasteBy={}; wasteRows.forEach(r=>{ wasteBy[r.m+'|'+r.d]=nv(r.waste); });
+        const wasteBy={}; wasteRows.forEach(r=>{ wasteBy[r.m]=nv(r.waste); });
         const nptBy={}; nptRows.forEach(r=>{ nptBy[r.m]={nptLoss:nv(r.nptLoss),bdCount:nv(r.bdCount)}; });
         t.machAll=maRows.map(r=>{ const nb=nptBy[r.m]||{nptLoss:0,bdCount:0};
-          return {m:r.m,u:r.u,d:r.d,actual:nv(r.actual),good:nv(r.good),target:nv(r.target),Av:nv(r.Av),Dur:nv(r.Dur),Pln:nv(r.Pln),cap:nv(r.cap),smv:nv(r.smv),npt:nv(r.npt),wastTgt:nv(r.wastTgt),waste:wasteBy[r.m+'|'+r.d]||0,actRPM:nv(r.actRPM),stdRPM:nv(r.stdRPM),nptLoss:nb.nptLoss,bdCount:nb.bdCount}; });
+          return {m:r.m,u:r.u,d:dTo,actual:nv(r.actual),good:nv(r.good),target:nv(r.target),Av:nv(r.Av),Dur:nv(r.Dur),Pln:nv(r.Pln),cap:nv(r.cap),smv:nv(r.smv),npt:nv(r.npt),wastTgt:nv(r.wastTgt),waste:wasteBy[r.m]||0,actRPM:nv(r.actRPM),stdRPM:nv(r.stdRPM),nptLoss:nb.nptLoss,bdCount:nb.bdCount}; });
+        // Latest-day per-machine (for the alert email's "today" production numbers)
+        try{
+          const md=(t.meta&&t.meta.maxDate)||dTo;
+          const tRows=await callMCP('mes','ExecuteReadOnlyQueryAsync',{sqlQuery:
+            `SELECT LTRIM(RTRIM(h.strMachineName)) m, LTRIM(RTRIM(h.strUOMName)) u, SUM(ISNULL(h.numActualOutputQuantity,0)) actual, SUM(ISNULL(h.numGoodOutputQuantity,0)) good, SUM(ISNULL(h.numShiftTargetQuantity,0)) target, SUM(ISNULL(h.numCapacityPerHr,0)*ISNULL(h.numShiftDurationMinute,0)/60.0) cap FROM mes.tblOeeProdWasteHeader h WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ${plantIn(P,'h.strPlantName')} AND h.dteProductionDate='${md}' GROUP BY h.strMachineName, LTRIM(RTRIM(h.strUOMName))`, limit:800});
+          t.machToday=tRows.map(r=>({m:r.m,u:r.u,d:md,actual:nv(r.actual),good:nv(r.good),target:nv(r.target),cap:nv(r.cap)}));
+        }catch(e){ t.machToday=[]; }
       }catch(e){ t.machAll=[]; }
     }
   } catch(e) { /* skip */ }
@@ -416,7 +425,7 @@ module.exports = async (req, res) => {
     if (wantLive) data = await mergeLive(live, req.query.focus);
     let out;
     try { out = await injectMOH(data, req.query.focus); } catch { out = data; }
-    try { out = await injectProductTargets(out, req.query.focus); } catch {}
+    try { out = await injectProductTargets(out, req.query.focus, req.query.from, req.query.to); } catch {}
     try { out = await injectPlanVar(out, req.query.focus); } catch {}
     try { out = await injectSchedMaint(out, req.query.focus); } catch {}
     try { out = await injectTgtOut(out, req.query.focus); } catch {}

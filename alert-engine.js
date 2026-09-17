@@ -53,7 +53,7 @@ function buildReportHTML(plant, key) {
   const pct=v=>v==null?'—':(v*100).toFixed(2)+'%';
   const fmt=n=>n==null?'—':(Math.round(n)).toLocaleString('en-US');
   // Totals from corrected all-machines data (machDailyAll fallback machAll/machDaily)
-  const dayRows=(plant.machAll||plant.machDailyAll||plant.machDaily||[]).filter(x=>x.d===asOf);
+  const dayRows=(plant.machToday||plant.machAll||plant.machDailyAll||plant.machDaily||[]).filter(x=>x.d===asOf);
   const prod=dayRows.reduce((s,x)=>s+num(x.actual),0);
   const good=dayRows.reduce((s,x)=>s+num(x.good),0);
   const tgt=dayRows.reduce((s,x)=>s+num(x.target),0);
