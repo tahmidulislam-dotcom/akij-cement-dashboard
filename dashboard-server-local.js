@@ -1113,12 +1113,8 @@ async function runAlertJob(){
     const r = await fetch(`http://localhost:${PORT}/api/alert-check`, { method:'POST' });
     const j = await r.json();
     console.log('alert job result:', JSON.stringify(j.error || { sent: (j.sent||[]).length, alerts: (j.sent||[]).map(s=>s.key) }));
-    // Also send the latest-data daily report to ALL configured recipients
-    try{
-      const dr = await fetch(`http://localhost:${PORT}/api/daily-report`, { method:'POST' });
-      const dj = await dr.json();
-      console.log('daily report result:', JSON.stringify(dj));
-    }catch(e){ console.error('daily report failed', e.message); }
+    // Daily Production Report is now sent from the cloud (Vercel cron -> /api/alert-check GET) so it
+    // no longer depends on this PC being on. Kept here only as a manual/on-demand path via /api/daily-report.
   }catch(e){ console.error('alert job failed', e.message); }
 }
 function scheduleNextAlert(){
