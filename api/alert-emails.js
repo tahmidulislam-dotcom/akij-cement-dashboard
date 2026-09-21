@@ -18,6 +18,9 @@ module.exports = async (req, res) => {
     const list = a => Array.isArray(a) ? a.map(x => String(x).trim().toLowerCase()).filter(valid) : [];
     if (b.config) for (const [k, v] of Object.entries(b.config)) {
       if (k === '_deputy') { cfg._deputy = String(v).trim() || cfg._deputy; continue; }
+      if (k === '_additional') { cfg._additional = list(v); continue; }
+      if (k === 'alertsEnabled') { cfg.alertsEnabled = !!v; continue; }
+      if (typeof v !== 'object' || v === null) continue;
       cfg[k] = cfg[k] || {};
       if (v.name) cfg[k].name = v.name;
       if (v.plant_head) cfg[k].plant_head = list(v.plant_head);

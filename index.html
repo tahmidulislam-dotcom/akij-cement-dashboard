@@ -1173,11 +1173,26 @@ function setAlertEnabled(enabled){
     alertStatus(alertsEnabled?'Alert emails RESUMED ✔':'Alert emails STOPPED ⏹','ok');
   }).catch(e=>alertStatus('Toggle failed: '+e.message,'err'));
 }
+const ADD_LS_KEY='alertAdditionalEmails';
+function getLocalAdditional(){ try { const a=JSON.parse(localStorage.getItem(ADD_LS_KEY)||'[]'); return Array.isArray(a)?a.filter(Boolean):[]; } catch { return []; } }
+function setLocalAdditional(arr){ try { localStorage.setItem(ADD_LS_KEY, JSON.stringify(arr)); } catch {} }
+function syncAdditionalToServer(){
+  const add=getLocalAdditional(); if(!add.length) return;
+  fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:{_additional:add}})}).catch(()=>{});
+}
 function loadAlertEmails(){
+  const local=getLocalAdditional();
   fetch(`${API}/api/alert-emails`).then(r=>r.json()).then(d=>{
-    alertCfg=d.config||{}; alertsEnabled = d.alertsEnabled!==false; renderAlertToggle(); renderAlertTable(); renderAdditionalEmails();
+    alertCfg=d.config||{}; alertsEnabled = d.alertsEnabled!==false;
+    if(!(alertCfg._additional&&alertCfg._additional.length)) alertCfg._additional=local;
+    renderAlertToggle(); renderAlertTable(); renderAdditionalEmails();
     if($('alertEmailsNote')) $('alertEmailsNote').textContent=`Recipients loaded · escalation state: count=${Object.keys(d.state&&d.state.counts||{}).length} SBU `;
-  }).catch(e=>{ if($('alertEmailsNote')) $('alertEmailsNote').textContent='Failed to load alert recipients: '+e.message; });
+    syncAdditionalToServer();
+  }).catch(e=>{
+    alertCfg=alertCfg||{}; if(!(alertCfg._additional&&alertCfg._additional.length)) alertCfg._additional=local;
+    renderAlertToggle(); renderAlertTable(); renderAdditionalEmails();
+    if($('alertEmailsNote')) $('alertEmailsNote').textContent=`Server not reachable (${e.message}) — showing locally saved recipients`;
+  });
 }
 function renderAlertTable(){
   const tb=$('alertEmailTable').querySelector('tbody'); if(!tb) return;
@@ -1213,18 +1228,21 @@ function saveAlertEmails(){
 }
 function renderAdditionalEmails(){
   const inp=$('additionalEmails'); if(!inp) return;
-  const add=(alertCfg&&alertCfg._additional)||[];
+  let add=(alertCfg&&alertCfg._additional)||[];
+  if(!add.length) add=getLocalAdditional();
   inp.value = (Array.isArray(add)?add:[]).join(', ');
   if($('additionalEmailsNote')) $('additionalEmailsNote').textContent = add.length ? `${add.length} additional recipient(s)` : 'No additional recipients yet';
 }
 function saveAdditionalEmails(){
-  if(!alertCfg){ alertStatus('No config','err'); return; }
-  const cfg=JSON.parse(JSON.stringify(alertCfg));
   const split=s=>String(s).split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
-  cfg._additional = split($('additionalEmails').value);
-  fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})}).then(r=>r.json()).then(d=>{
-    alertCfg=d.config||cfg; renderAdditionalEmails(); alertStatus('Additional recipients saved ✔','ok');
-  }).catch(e=>alertStatus('Save failed: '+e.message,'err'));
+  const add=split($('additionalEmails').value);
+  setLocalAdditional(add);
+  alertCfg=alertCfg||{}; alertCfg._additional=add;
+  renderAdditionalEmails();
+  const cfg=JSON.parse(JSON.stringify(alertCfg)); cfg._additional=add;
+  fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})})
+    .then(r=>r.json()).then(d=>{ alertCfg=d.config||cfg; renderAdditionalEmails(); alertStatus('Additional recipients saved ✔','ok'); })
+    .catch(()=>alertStatus('Additional recipients saved ✔ (stored in this browser; server offline)','ok'));
 }
 function runAlertCheck(){
   alertStatus('Running alert check — sending emails…','wait');

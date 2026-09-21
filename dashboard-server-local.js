@@ -312,6 +312,8 @@ const server = http.createServer(async (req, res) => {
         for (const [k, v] of Object.entries(b.config)) {
           if (k === '_deputy') { cfg._deputy = sanitizeList([v])[0] || v || 'deputy.coo@akijresource.com'; continue; }
           if (k === '_additional') { cfg._additional = sanitizeList(Array.isArray(v) ? v : String(v||'').split(',')); continue; }
+          if (k === 'alertsEnabled') { cfg.alertsEnabled = !!v; continue; }
+          if (typeof v !== 'object' || v === null) continue;
           cfg[k] = cfg[k] || {};
           if (v) { if (v.name) cfg[k].name = v.name; if (v.plant_head) cfg[k].plant_head = sanitizeList(v.plant_head); if (v.hob_ceo) cfg[k].hob_ceo = sanitizeList(v.hob_ceo); }
         }
