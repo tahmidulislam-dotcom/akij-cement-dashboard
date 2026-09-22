@@ -60,6 +60,10 @@ module.exports = async (req, res) => {
 
     if (req.method === 'GET') {
       // Cron → daily report only (threshold escalation stays on the local server to avoid duplicates)
+      // Sending is gated OFF until DAILY_REPORT_ENABLED=true is set in the Vercel env.
+      if (process.env.DAILY_REPORT_ENABLED !== 'true') {
+        return res.status(200).json({ mode: 'daily-report', skipped: true, reason: 'DAILY_REPORT_ENABLED is not set to true' });
+      }
       await attachSheetsToAll(live);
       const out = await alertEngine.sendDailyReport(live, cfg, sender);
       return res.status(200).json({ mode: 'daily-report', ...out });

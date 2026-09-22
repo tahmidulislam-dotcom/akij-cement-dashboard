@@ -45,20 +45,33 @@ function fmt(v){ const n=parseFloat(String(v==null?'':v).replace(/,/g,'')); retu
 
 function oeeTargetFor(key, ym){ const sbu=SBU[key]; if(!sbu||!T.oee[sbu])return null; const v=T.oee[sbu][ym]; return (v==null||v===0)?null:v; }
 
-// Professional KPI dashboard report for one SBU
-function buildReportHTML(plant, key) {
-  const ym=(plant&&plant.meta&&plant.meta.maxDate)?plant.meta.maxDate.slice(0,7):'';
-  const asOf=(plant&&plant.meta&&plant.meta.maxDate)||'';
+// yyyy-mm-dd for Dhaka, offset by N days (0 = today, -1 = yesterday)
+function dhakaDate(offsetDays){
+  const fmt=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Dhaka',year:'numeric',month:'2-digit',day:'2-digit'});
+  const d=new Date(fmt.format(new Date())+'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate()+(offsetDays||0));
+  return d.toISOString().slice(0,10);
+}
+
+// Professional KPI dashboard report for one SBU.
+// asOfOverride: force a specific production date (e.g. previous day). Defaults to latest available.
+function buildReportHTML(plant, key, asOfOverride) {
+  const asOf=asOfOverride || (plant&&plant.meta&&plant.meta.maxDate)||'';
+  const ym=asOf?asOf.slice(0,7):((plant&&plant.meta&&plant.meta.maxDate)?plant.meta.maxDate.slice(0,7):'');
   const num=x=>{const n=parseFloat(String(x==null?0:x).replace(/,/g,''));return isNaN(n)?0:n;};
   const pct=v=>v==null?'—':(v*100).toFixed(2)+'%';
   const fmt=n=>n==null?'—':(Math.round(n)).toLocaleString('en-US');
-  // Totals from corrected all-machines data (machDailyAll fallback machAll/machDaily)
-  const dayRows=(plant.machToday||plant.machAll||plant.machDailyAll||plant.machDaily||[]).filter(x=>x.d===asOf);
+  // Totals from corrected all-machines data. For a fixed (past) report date use the range arrays
+  // (machAll/machDailyAll) — machToday only ever holds the latest day and can't serve a past date.
+  const src=asOfOverride
+    ?(plant.machAll||plant.machDailyAll||plant.machDaily||[])
+    :(plant.machToday||plant.machAll||plant.machDailyAll||plant.machDaily||[]);
+  const dayRows=src.filter(x=>x.d===asOf);
   const prod=dayRows.reduce((s,x)=>s+num(x.actual),0);
   const good=dayRows.reduce((s,x)=>s+num(x.good),0);
   const tgt=dayRows.reduce((s,x)=>s+num(x.target),0);
   // OEE / NPT from corrected sources
-  let oee=null; const ov=(plant.oeeV2All||[]).find(x=>x.d===asOf)||(plant.oeeV2All||[])[(plant.oeeV2All||[]).length-1];
+  let oee=null; const ov=(plant.oeeV2All||[]).find(x=>x.d===asOf) || (asOfOverride?null:(plant.oeeV2All||[])[(plant.oeeV2All||[]).length-1]);
   if(ov&&ov.OEE!=null) oee=ov.OEE/100;
   const cu=dayRows.reduce((s,x)=>s+num(x.cap),0)>0 ? prod/dayRows.reduce((s,x)=>s+num(x.cap),0) : null;
   const q=prod>0?good/prod:null;
@@ -310,17 +323,17 @@ function collectRecipients(emailConfig){
   return [...set];
 }
 
-// Build a single consolidated "latest data" report for every SBU (today's/latest available date only).
+// Build a single consolidated report for every SBU, using the PREVIOUS day's data (Dhaka).
 function buildDailyReportHTML(live, emailConfig){
-  const today = new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Dhaka'});
+  const reportDate = dhakaDate(-1);
   const keys = Object.keys(live.plants||{});
   const cards = keys.map(key=>{
     const plant = live.plants[key];
     const cfg = (emailConfig && emailConfig[key]) || {};
     return `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;margin:10px 0">
-      <div style="font-weight:700;color:#0f766e;margin-bottom:4px">${cfg.name||key}</div>${buildReportHTML(plant, key)}</div>`;
+      <div style="font-weight:700;color:#0f766e;margin-bottom:4px">${cfg.name||key}</div>${buildReportHTML(plant, key, reportDate)}</div>`;
   }).join('');
-  return { today, count: keys.length, cards };
+  return { today: reportDate, count: keys.length, cards };
 }
 
 // Send the latest-data daily report to ALL configured recipients (no threshold gating).
@@ -328,7 +341,7 @@ async function sendDailyReport(live, emailConfig, sendFn){
   const recipients = collectRecipients(emailConfig);
   if (!recipients.length) return { sent:false, reason:'no recipients configured' };
   const { today, count, cards } = buildDailyReportHTML(live, emailConfig);
-  const header = `<div style="font-size:13px;color:#334155;margin-bottom:6px">Daily production report — <b>latest available data</b> for <b>${count}</b> SBU(s) · <b>${today}</b>.</div>`;
+  const header = `<div style="font-size:13px;color:#334155;margin-bottom:6px">Daily production report — data for <b>${today}</b> across <b>${count}</b> SBU(s).</div>`;
   const html = wrapEmail(`Daily Production Report — ${today}`, header + cards);
   try { await sendFn(recipients, `📊 Daily Production Report — ${today}`, html); return { sent:true, to:recipients, count }; }
   catch(e){ return { sent:false, error:e.message }; }
