@@ -52,11 +52,17 @@ module.exports = async (req, res) => {
 
     if (req.method === 'GET') {
       // Cron → daily report only (threshold escalation stays on the local server to avoid duplicates)
+      const reportDate = alertEngine.dhakaDate(-1);
       // Sending is gated OFF until DAILY_REPORT_ENABLED=true is set in the Vercel env.
       if (process.env.DAILY_REPORT_ENABLED !== 'true') {
+        // Dry-run: build the report and return it (no email) when ?dryrun=1
+        if (req.query && req.query.dryrun === '1') {
+          const live = await buildDailyReportLive(reportDate);
+          const { today, count, cards } = alertEngine.buildDailyReportHTML(live, cfg, reportDate);
+          return res.status(200).json({ mode: 'daily-report', dryrun: true, reportDate: today, count, cards });
+        }
         return res.status(200).json({ mode: 'daily-report', skipped: true, reason: 'DAILY_REPORT_ENABLED is not set to true' });
       }
-      const reportDate = alertEngine.dhakaDate(-1);
       const live = await buildDailyReportLive(reportDate);
       const out = await alertEngine.sendDailyReport(live, cfg, sender, reportDate);
       return res.status(200).json({ mode: 'daily-report', ...out });
