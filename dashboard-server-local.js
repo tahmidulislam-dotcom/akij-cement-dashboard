@@ -350,11 +350,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/daily-report' && req.method === 'POST') {
       try {
-        const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
+        const reportDate = alertEngine.dhakaDate(-1);
+        const r = await fetch(`http://localhost:${PORT}/api/data?live=1&date=${reportDate}`);
         const live = r.ok ? (await r.json()) : { plants:{} };
         await attachSheetsToAll(live);
         const cfg = loadAlertCfg();
-        const out = await alertEngine.sendDailyReport(live, cfg, async (to, subject, htmlBody) => { return await sendEmail(to, subject, htmlBody); });
+        const out = await alertEngine.sendDailyReport(live, cfg, async (to, subject, htmlBody) => { return await sendEmail(to, subject, htmlBody); }, reportDate);
         return json(res, 200, out);
       } catch (e) { return json(res, 500, { error: e.message }); }
     }
@@ -828,11 +829,15 @@ const server = http.createServer(async (req, res) => {
                   const nb=nptBy[r.m]||{nptLoss:0,bdCount:0};
                   return {m:r.m,u:r.u,d:dTo,actual:mNv(r.actual),good:mNv(r.good),target:mNv(r.target),Av:mNv(r.Av),Dur:mNv(r.Dur),Pln:mNv(r.Pln),cap:mNv(r.cap),smv:mNv(r.smv),npt:mNv(r.npt),wastTgt:mNv(r.wastTgt),waste:wasteBy[r.m]||0,actRPM:mNv(r.actRPM),stdRPM:mNv(r.stdRPM),nptLoss:nb.nptLoss,bdCount:nb.bdCount};
                 });
-                // Latest-day per-machine (for the alert email's "today" production numbers)
+                // Per-machine rows for the report date (drives the email KPI card, like the dashboard machSummary())
                 try{
-                  const md=(tgt.meta&&tgt.meta.maxDate)||dTo;
-                  const tRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, LTRIM(RTRIM(h.strUOMName)) u, SUM(ISNULL(h.numActualOutputQuantity,0)) actual, SUM(ISNULL(h.numGoodOutputQuantity,0)) good, SUM(ISNULL(h.numShiftTargetQuantity,0)) target, SUM(ISNULL(h.numCapacityPerHr,0)*ISNULL(h.numShiftDurationMinute,0)/60.0) cap FROM mes.tblOeeProdWasteHeader h WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ${pfIn(P,'h.strPlantName')} AND h.dteProductionDate='${md}' GROUP BY h.strMachineName, LTRIM(RTRIM(h.strUOMName))`, 200);
-                  tgt.machToday=tRows.map(r=>({m:r.m,u:r.u,d:md,actual:mNv(r.actual),good:mNv(r.good),target:mNv(r.target),cap:mNv(r.cap)}));
+                  const md=reqDate||(tgt.meta&&tgt.meta.maxDate)||dTo;
+                  const tRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, LTRIM(RTRIM(h.strUOMName)) u, SUM(ISNULL(h.numActualOutputQuantity,0)) actual, SUM(ISNULL(h.numGoodOutputQuantity,0)) good, SUM(ISNULL(h.numShiftTargetQuantity,0)) target, SUM(ISNULL(h.numCapacityPerHr,0)*ISNULL(h.numShiftDurationMinute,0)/60.0) cap, SUM(ISNULL(h.numAvailableMinute,0)) Av, SUM(ISNULL(h.numShiftDurationMinute,0)) Dur, SUM(ISNULL(h.numPlannedDowntimeMin,0)) Pln, SUM(ISNULL(h.numSMVCycleTime,0)*ISNULL(h.numActualOutputQuantity,0)) smv, SUM(ISNULL(h.numNptLossTimeInMinutes,0)) npt, SUM(ISNULL(h.numWastageTargetQuantity,0)) wastTgt FROM mes.tblOeeProdWasteHeader h WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ${pfIn(P,'h.strPlantName')} AND h.dteProductionDate='${md}' GROUP BY h.strMachineName, LTRIM(RTRIM(h.strUOMName))`, 200);
+                  const twRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strMachineName)) m, SUM(ISNULL(r.numWasteQuantity,0)) waste FROM mes.tblOeeProdWasteHeader h WITH (NOLOCK) JOIN mes.tblOeeProdWasteRow r WITH (NOLOCK) ON r.intOeeProdWasteHeaderId=h.intOeeProdWasteHeaderId WHERE h.intBusinessUnitId=${P.bu} AND h.isActive=1 AND r.isActive=1 AND ${pfIn(P,'h.strPlantName')} AND h.dteProductionDate='${md}' GROUP BY h.strMachineName`, 200);
+                  const tnRows=await ibosQuery(`SELECT LTRIM(RTRIM(h.strWrokCenterName)) m, SUM(ISNULL(r.intLossTimeInMinutes,0)) nptLoss FROM mes.tblNPTHeader h WITH (NOLOCK) JOIN mes.tblNPTRow r WITH (NOLOCK) ON r.intNPTId=h.intNPTId WHERE h.intBusinessUnitId=${P.bu} AND ISNULL(h.isActive,1)=1 AND ISNULL(r.isActive,1)=1 AND r.intCategoryId IN (456,457) AND h.dteLossTimeDate='${md}' GROUP BY LTRIM(RTRIM(h.strWrokCenterName))`, 200);
+                  const twBy={}; twRows.forEach(r=>{ twBy[r.m]=mNv(r.waste); });
+                  const tnBy={}; tnRows.forEach(r=>{ tnBy[r.m]=mNv(r.nptLoss); });
+                  tgt.machToday=tRows.map(r=>({m:r.m,u:r.u,d:md,actual:mNv(r.actual),good:mNv(r.good),target:mNv(r.target),cap:mNv(r.cap),Av:mNv(r.Av),Dur:mNv(r.Dur),Pln:mNv(r.Pln),smv:mNv(r.smv),npt:mNv(r.npt),wastTgt:mNv(r.wastTgt),waste:twBy[r.m]||0,nptLoss:tnBy[r.m]||0}));
                 }catch(e){ tgt.machToday=[]; }
               }catch(e){ console.error('  machAll '+P.key+' failed', e.message); tgt.machAll=[]; }
             }

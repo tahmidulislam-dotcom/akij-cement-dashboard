@@ -53,61 +53,74 @@ function dhakaDate(offsetDays){
   return d.toISOString().slice(0,10);
 }
 
-// Professional KPI dashboard report for one SBU.
+// KPI report card for one SBU. Mirrors the dashboard summary (machSummary()): per-machine ratios are
+// averaged — ACCL OEE/Capacity/Yield use VRM-1+VRM-2 only, NPT is averaged across all machines.
 // asOfOverride: force a specific production date (e.g. previous day). Defaults to latest available.
 function buildReportHTML(plant, key, asOfOverride) {
   const asOf=asOfOverride || (plant&&plant.meta&&plant.meta.maxDate)||'';
   const ym=asOf?asOf.slice(0,7):((plant&&plant.meta&&plant.meta.maxDate)?plant.meta.maxDate.slice(0,7):'');
   const num=x=>{const n=parseFloat(String(x==null?0:x).replace(/,/g,''));return isNaN(n)?0:n;};
-  const pct=v=>v==null?'—':(v*100).toFixed(2)+'%';
   const fmt=n=>n==null?'—':(Math.round(n)).toLocaleString('en-US');
-  // Totals from corrected all-machines data. For a fixed (past) report date use the range arrays
-  // (machAll/machDailyAll) — machToday only ever holds the latest day and can't serve a past date.
-  const src=asOfOverride
-    ?(plant.machAll||plant.machDailyAll||plant.machDaily||[])
-    :(plant.machToday||plant.machAll||plant.machDailyAll||plant.machDaily||[]);
-  const dayRows=src.filter(x=>x.d===asOf);
-  const prod=dayRows.reduce((s,x)=>s+num(x.actual),0);
-  const good=dayRows.reduce((s,x)=>s+num(x.good),0);
-  const tgt=dayRows.reduce((s,x)=>s+num(x.target),0);
-  // OEE / NPT from corrected sources
-  let oee=null; const ov=(plant.oeeV2All||[]).find(x=>x.d===asOf) || (asOfOverride?null:(plant.oeeV2All||[])[(plant.oeeV2All||[]).length-1]);
-  if(ov&&ov.OEE!=null) oee=ov.OEE/100;
-  const cu=dayRows.reduce((s,x)=>s+num(x.cap),0)>0 ? prod/dayRows.reduce((s,x)=>s+num(x.cap),0) : null;
-  const q=prod>0?good/prod:null;
-  const nall=(plant.nptInfo&&plant.nptInfo.combinedAll&&plant.nptInfo.combinedAll.npt!=null)?plant.nptInfo.combinedAll.npt/100:null;
-  const wasteRows=(plant.waste||[]).filter(w=>w.d===asOf);
-  const wasteAct=wasteRows.reduce((s,w)=>s+num(w.waste),0);
-  const wasteTgt=wasteRows.reduce((s,w)=>s+num(w.target),0)||0;
-  const wastePct=prod>0?wasteAct/prod:null;
-  // Unit of measurement — from item/product UoM in the production data (prefer weight: MT/KG/Ton, else first)
-  const _uoms=dayRows.map(x=>x&&x.u).filter(Boolean);
-  const uom=((_uoms.find(u=>/ton|mt|kg|kilogram/i.test(String(u)))) || _uoms[0] || '');
-  const uomTxt = uom || '—';
-  // ACCL actual output (Good Production): (VRM-1+VRM-2 good) Ton + (Packer good + BulkLoader good/20) Bag
+  const p1=v=>v==null?'—':(v*100).toFixed(1)+'%';
+  const p2=v=>v==null?'—':(v*100).toFixed(2)+'%';
+  const dayRows=(plant.machToday||[]).filter(x=>x.d===asOf);
+  // Aggregate per machine (same sums as dashboard machSummary())
+  const mk={};
+  dayRows.forEach(r=>{ const k=r.m; mk[k]=mk[k]||{m:r.m,u:r.u,cap:0,tgt:0,prod:0,good:0,waste:0,Av:0,Dur:0,Pln:0,smv:0,npt:0,nptLoss:0,wastTgt:0};
+    const o=mk[k]; o.cap+=num(r.cap);o.tgt+=num(r.target);o.prod+=num(r.actual);o.good+=num(r.good);o.waste+=num(r.waste);o.Av+=num(r.Av);o.Dur+=num(r.Dur);o.Pln+=num(r.Pln);o.smv+=num(r.smv);o.npt+=num(r.npt);o.nptLoss+=num(r.nptLoss);o.wastTgt+=num(r.wastTgt); });
+  const ms=Object.values(mk).map(m=>{
+    const avail=(m.Dur-m.Pln)>0?(m.Av-m.npt)/(m.Dur-m.Pln):0;
+    const perf=m.Av>0?m.smv/m.Av:0;
+    const qual=m.prod>0?Math.min(m.good/m.prod,1):0;
+    const oee=(m.prod>0&&avail>0&&perf>0&&qual>0)?avail*perf*qual:0;
+    const cu=m.cap>0?m.prod/m.cap:null;
+    const nptPct=m.Av>0?m.nptLoss/m.Av:null;
+    const y=m.prod>0?m.good/m.prod:null;
+    return Object.assign({},m,{oee,cu,nptPct,y});
+  });
+  const vrm=ms.filter(x=>/vrm/i.test(x.m));
+  const oeeSet=(key==='accl'&&vrm.length)?vrm:ms;
+  const avg=(arr,f)=>{ const v=arr.map(x=>x[f]).filter(x=>x!=null); return v.length?v.reduce((s,x)=>s+x,0)/v.length:null; };
+  const oee=oeeSet.length?(oeeSet.reduce((s,x)=>s+(x.oee||0),0)/oeeSet.length):null;
+  const cu=avg(oeeSet,'cu');
+  const q=avg(oeeSet,'y');
+  const nptAvg=avg(ms,'nptPct');
+  const wasteSum=ms.reduce((s,x)=>s+(x.waste||0),0);
+  const wasteTgtSum=ms.reduce((s,x)=>s+(x.wastTgt||0),0);
+  const goodSum=ms.reduce((s,x)=>s+(x.good||0),0);
+  const prodSum=ms.reduce((s,x)=>s+(x.prod||0),0);
+  const wastePct=prodSum>0?wasteSum/prodSum:null;
+  const uoms=[...new Set(ms.map(x=>x.u).filter(Boolean))];
+  const uom=(uoms.find(u=>/ton|mt|kg|kilogram/i.test(String(u)))||uoms[0]||'');
+  const uomTxt=uom||'—';
+  // Target Output split by UoM (matches the dashboard's "Target Output" line)
+  const byU={}; ms.forEach(x=>{ const u=x.u||''; byU[u]=(byU[u]||0)+x.tgt; });
+  const tgtLabel=Object.keys(byU).filter(u=>u).map(u=>`${fmt(byU[u])} ${/ton|mt/i.test(u)?'Ton':(/bag|pices/i.test(u)?'Bag':u)}`).join(' · ')||'—';
+  // ACCL actual output: (VRM good) Ton + (Packer good + Bulk good/20) Bag
   let actLabel;
-  if(key==='accl' && (plant.machAll||[]).length){
-    let vrm=0,packer=0,bulk=0;
-    (plant.machAll||[]).filter(x=>x.d===asOf).forEach(x=>{ if(/vrm/i.test(x.m))vrm+=num(x.good); else if(/packer/i.test(x.m))packer+=num(x.good); else if(/bulk/i.test(x.m))bulk+=num(x.good); });
-    actLabel=`${Math.round(vrm)} Ton · ${Math.round(packer+bulk/20)} Bag`;
+  if(key==='accl' && ms.length){
+    let vrmG=0,packer=0,bulk=0;
+    ms.forEach(x=>{ if(/vrm/i.test(x.m))vrmG+=x.good; else if(/packer/i.test(x.m))packer+=x.good; else if(/bulk/i.test(x.m))bulk+=x.good; });
+    actLabel=`${Math.round(vrmG)} Ton · ${Math.round(packer+bulk/20)} Bag`;
   } else {
-    actLabel = good>0 ? (fmt(good)+' '+uomTxt) : '—';
+    actLabel = goodSum>0 ? (fmt(goodSum)+' '+uomTxt) : '—';
   }
   const oeeT=oeeTargetFor(key, ym);
+  const kaizenVal=(plant.kaizen&&plant.kaizen.count!=null)?plant.kaizen.count:(plant.kaizen?plant.kaizen.mtdCount:null);
   const title=`<h3 style="margin:0 0 6px;color:#0f766e">${key} — Production KPIs (${asOf||ym})</h3>`;
   const row=(k,v,t)=>`<tr><td style="padding:7px 10px;border-bottom:1px solid #eee;color:#334155">${k}</td><td style="padding:7px 10px;text-align:right;border-bottom:1px solid #eee;font-weight:600;color:#0f172a">${v}</td>${t?`<td style="padding:7px 10px;border-bottom:1px solid #eee;color:#64748b">${t}</td>`:''}</tr>`;
   const table=`<table style="border-collapse:collapse;width:100%;font-size:13px;margin:8px 0">
-    ${row('Production OEE', oee!=null?(oee*100).toFixed(2)+'%':'—', oeeT!=null?('Target '+oeeT+'%'):'No OEE target')}
-    ${row('Capacity Utilization', cu!=null?(cu*100).toFixed(2)+'%':'—', 'Target 80%')}
-    ${row('NPT%', nall!=null?(nall*100).toFixed(2)+'%':'—')}
-    ${row('Yield', q!=null?(q*100).toFixed(2)+'%':'—')}
-    ${row('Wastage%', wastePct!=null?(wastePct*100).toFixed(2)+'%':'—')}
-    ${row('Actual Production (Good)', actLabel)}
-    ${row('Production Target (Target)', fmt(tgt)+' '+uomTxt)}
-    ${row('Actual Wastage', fmt(wasteAct)+' '+uomTxt)}
-    {row('Wastage Target', fmt(wasteTgt)+' '+uomTxt)}
+    ${row('Production OEE', p1(oee), oeeT!=null?('Target '+oeeT+'%'):'No OEE target')}
+    ${row('Capacity Utilization', p1(cu), 'Target 80%')}
+    ${row('NPT (Non-Productive Time)', p1(nptAvg))}
+    ${row('Yield', p1(q))}
+    ${row('Wastage%', p2(wastePct))}
+    ${row('Actual Output', actLabel)}
+    ${row('Target Output', tgtLabel)}
+    ${row('Actual Wastage', fmt(wasteSum)+' '+uomTxt)}
+    ${row('Wastage Target', fmt(wasteTgtSum)+' '+uomTxt)}
     ${row('5S Score', (plant.fiveS&&plant.fiveS.todayValue!=null?plant.fiveS.todayValue+'%':'—'), 'Target 70%')}
-    ${row('Kaizen (MTD)', (plant.kaizen&&plant.kaizen.mtdCount!=null?plant.kaizen.mtdCount:'—'), 'Target 10')}
+    ${row('Kaizen', (kaizenVal!=null?kaizenVal:'—'), 'Target 10')}
     </table>`;
   return title+table;
 }
@@ -324,8 +337,8 @@ function collectRecipients(emailConfig){
 }
 
 // Build a single consolidated report for every SBU, using the PREVIOUS day's data (Dhaka).
-function buildDailyReportHTML(live, emailConfig){
-  const reportDate = dhakaDate(-1);
+function buildDailyReportHTML(live, emailConfig, reportDateOverride){
+  const reportDate = reportDateOverride || dhakaDate(-1);
   const keys = Object.keys(live.plants||{});
   const cards = keys.map(key=>{
     const plant = live.plants[key];
@@ -337,14 +350,14 @@ function buildDailyReportHTML(live, emailConfig){
 }
 
 // Send the latest-data daily report to ALL configured recipients (no threshold gating).
-async function sendDailyReport(live, emailConfig, sendFn){
+async function sendDailyReport(live, emailConfig, sendFn, reportDateOverride){
   const recipients = collectRecipients(emailConfig);
   if (!recipients.length) return { sent:false, reason:'no recipients configured' };
-  const { today, count, cards } = buildDailyReportHTML(live, emailConfig);
+  const { today, count, cards } = buildDailyReportHTML(live, emailConfig, reportDateOverride);
   const header = `<div style="font-size:13px;color:#334155;margin-bottom:6px">Daily production report — data for <b>${today}</b> across <b>${count}</b> SBU(s).</div>`;
   const html = wrapEmail(`Daily Production Report — ${today}`, header + cards);
   try { await sendFn(recipients, `📊 Daily Production Report — ${today}`, html); return { sent:true, to:recipients, count }; }
   catch(e){ return { sent:false, error:e.message }; }
 }
 
-module.exports = { evaluateAll, evaluateSbu, sendTestMail, sendDailyReport, collectRecipients, buildDailyReportHTML, defaultConfig, T };
+module.exports = { evaluateAll, evaluateSbu, sendTestMail, sendDailyReport, collectRecipients, buildDailyReportHTML, dhakaDate, defaultConfig, T };

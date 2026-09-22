@@ -7,7 +7,7 @@
 const fs = require('fs');
 const alertEngine = require('../alert-engine.js');
 const { smtpSend } = require('../lib/smtp.js');
-const { SHEET_CONFIG, fetchFiveSKaizen } = require('../lib/sheets.js');
+const { buildDailyReportLive } = require('../lib/report-data.js');
 
 const gmailSend = async (to, subject, html) => {
   const tok = JSON.parse(Buffer.from(process.env.GMAIL_TOKEN_BASE64 || '', 'base64').toString('utf8'));
@@ -36,26 +36,18 @@ function loadCloudConfig() {
   return cfg;
 }
 
-async function buildLive() {
+async function buildLive(reportDate) {
   const dataHandler = require('./data.js');
-  const dummyReq = { query: { live:'1' } };
+  const dummyReq = { query: { live:'1', date: reportDate || '' } };
   const dummyRes = { headers:{}, setHeader(k,v){ this.headers[k]=v; }, status(c){ this.statusCode=c; return this; }, json(o){ this.body=o; } };
   await dataHandler(dummyReq, dummyRes);
   return dummyRes.body || { plants:{} };
-}
-
-async function attachSheetsToAll(live) {
-  for (const k of Object.keys(SHEET_CONFIG)) {
-    if (!live.plants || !live.plants[k]) continue;
-    try { const sk = await fetchFiveSKaizen(k); if (sk) { live.plants[k].fiveS = sk.fiveS; live.plants[k].kaizen = sk.kaizen; } } catch (e) {}
-  }
 }
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');
   try {
-    const live = await buildLive();
     const cfg = loadCloudConfig();
 
     if (req.method === 'GET') {
@@ -64,12 +56,14 @@ module.exports = async (req, res) => {
       if (process.env.DAILY_REPORT_ENABLED !== 'true') {
         return res.status(200).json({ mode: 'daily-report', skipped: true, reason: 'DAILY_REPORT_ENABLED is not set to true' });
       }
-      await attachSheetsToAll(live);
-      const out = await alertEngine.sendDailyReport(live, cfg, sender);
+      const reportDate = alertEngine.dhakaDate(-1);
+      const live = await buildDailyReportLive(reportDate);
+      const out = await alertEngine.sendDailyReport(live, cfg, sender, reportDate);
       return res.status(200).json({ mode: 'daily-report', ...out });
     }
 
     // POST → manual threshold escalation check
+    const live = await buildLive();
     if (process.env.ALERTS_ENABLED === 'false' || cfg.alertsEnabled === false) {
       return res.status(200).json({ disabled: true, msg: 'Alert emails are STOPPED — use Resume to enable' });
     }
