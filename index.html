@@ -239,50 +239,6 @@ tr:last-child td{border-bottom:none}
       <button class="btn ghost" onclick="downloadReport()">⬇ Download Report (HTML)</button>
     </div>
 
-    <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
-
-    <h3>🚨 Alert Email Recipients <span style="color:var(--mut);font-weight:400;font-size:11px">(threshold alerts · escalation: plant head → HOB/CEO → Deputy COO · runs daily 22:00 Dhaka)</span></h3>
-    <div class="note" id="alertEmailsNote">Loading alert recipients…</div>
-    <div style="overflow-x:auto;margin:10px 0"><table id="alertEmailTable"><thead>
-      <tr><th>SBU</th><th>Plant Head (1st)</th><th>HOB / CEO (2nd)</th><th>Deputy COO (3rd+)</th></tr>
-    </thead><tbody></tbody></table></div>
-    <div style="margin:12px 0;padding:12px;background:rgba(45,212,191,.05);border:1px solid var(--line);border-radius:10px">
-      <label style="font-weight:700;color:var(--accent);font-size:12.5px">📬 Additional Recipients — also receive the combined Deputy COO mail (comma-separated):</label>
-      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-        <input id="additionalEmails" type="text" placeholder="email1@akij.com, email2@akij.com" style="flex:1;min-width:260px;background:#0b1220;color:#cdd7ea;border:1px solid #233048;border-radius:8px;padding:8px 10px;font-size:12px">
-        <button class="btn" onclick="saveAdditionalEmails()" style="padding:8px 12px;font-size:11.5px">💾 Save Additional</button>
-      </div>
-      <div class="note" id="additionalEmailsNote" style="margin-top:6px">Loading…</div>
-    </div>
-    <div class="em-row" style="margin-top:12px">
-      <span id="alertToggleBadge" class="badge b-green" style="margin-right:6px">● ON</span>
-      <button class="btn" id="btnAlertStop" onclick="setAlertEnabled(false)">⏹ Stop Alerts</button>
-      <button class="btn" id="btnAlertResume" onclick="setAlertEnabled(true)">▶ Resume Alerts</button>
-      <button class="btn ghost" onclick="toggleAlertEdit()">✏️ Edit Alert Recipients</button>
-      <button class="btn" onclick="saveAlertEmails()">💾 Save Alert Recipients</button>
-      <button class="btn ghost" onclick="runAlertCheck()">▶ Run Alert Check (test)</button>
-      <button class="btn ghost" onclick="sendTestMail()">📬 Send Test Mail (all SBUs)</button>
-      <span class="ai-status" id="alertStatus"></span>
-    </div>
-    <div style="margin-top:12px;font-size:12px;color:var(--mut)">
-      <b>Conditions checked:</b> OEE &lt; target · Yield &lt; 97% · Capacity Util &lt; 80% · Planning &lt; 80% · Actual Output (capacity) · Waste &gt; target · MOH &gt; target · Scheduled maintenance vs plan.
-    </div>
-
-    <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
-
-    <h3>📧 Email Recipients <span style="color:var(--mut);font-weight:400;font-size:11px">(max 5 — saved on this PC, editable anytime)</span></h3>
-    <div class="emails">
-      <input type="email" id="em1" placeholder="recipient1@company.com">
-      <input type="email" id="em2" placeholder="recipient2@company.com">
-      <input type="email" id="em3" placeholder="recipient3@company.com">
-      <input type="email" id="em4" placeholder="recipient4@company.com">
-      <input type="email" id="em5" placeholder="recipient5@company.com">
-    </div>
-    <div class="em-row">
-      <button class="btn ghost" onclick="saveEmails()">💾 Save Addresses</button>
-      <button class="btn" onclick="sendReport()">📤 Send Report via Gmail</button>
-      <span class="ai-status" id="emStatus"></span>
-    </div>
   </div>
 
 </div>
@@ -478,7 +434,7 @@ function setPlant(key){
   $('aiFrom').value=P.meta.maxDate; $('aiTo').value=P.meta.maxDate;
   lastReport=null;
   $('reportArea').innerHTML=`Report will appear here. Choose a period and click <b>Generate Analysis</b> for <b>${P.meta.name}</b>.`;
-  $('aiStatus').textContent=''; $('emStatus').textContent='';
+  $('aiStatus').textContent='';
   render();
   loadMachineOee();
   // fetch live data for the newly selected plant (was only fetched for the initial plant)
@@ -1156,126 +1112,12 @@ const API = location.origin.startsWith('http') ? '' : 'http://localhost:3212';
 let lastReport = null;
 
 function aiStatus(msg, cls){ const el=$('aiStatus'); el.innerHTML=`<span class="${cls||'wait'} pulse">${msg}</span>`; }
-function emStatusMsg(msg, cls){ const el=$('emStatus'); el.innerHTML=`<span class="${cls||'wait'}">${msg}</span>`; }
 
-/* ---------- Alert email recipients (threshold alerts) ---------- */
-let alertCfg=null, alertEditOn=false, alertsEnabled=true;
-function alertStatus(msg, cls){ const el=$('alertStatus'); if(el) el.innerHTML=`<span class="${cls||'wait'}">${msg}</span>`; }
-function renderAlertToggle(){
-  const badge=$('alertToggleBadge'); const stop=$('btnAlertStop'); const resume=$('btnAlertResume');
-  if(badge){ badge.className='badge '+(alertsEnabled?'b-green':'b-red'); badge.textContent=alertsEnabled?'● ON':'● STOPPED'; }
-  if(stop) stop.style.opacity = alertsEnabled?'1':'.5';
-  if(resume) resume.style.opacity = alertsEnabled?'.5':'1';
-}
-function setAlertEnabled(enabled){
-  fetch(`${API}/api/alert-toggle`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}).then(r=>r.json()).then(d=>{
-    alertsEnabled=!!d.alertsEnabled; renderAlertToggle();
-    alertStatus(alertsEnabled?'Alert emails RESUMED ✔':'Alert emails STOPPED ⏹','ok');
-  }).catch(e=>alertStatus('Toggle failed: '+e.message,'err'));
-}
-const ADD_LS_KEY='alertAdditionalEmails';
-function getLocalAdditional(){ try { const a=JSON.parse(localStorage.getItem(ADD_LS_KEY)||'[]'); return Array.isArray(a)?a.filter(Boolean):[]; } catch { return []; } }
-function setLocalAdditional(arr){ try { localStorage.setItem(ADD_LS_KEY, JSON.stringify(arr)); } catch {} }
-function syncAdditionalToServer(){
-  const add=getLocalAdditional(); if(!add.length) return;
-  fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:{_additional:add}})}).catch(()=>{});
-}
-function loadAlertEmails(){
-  const local=getLocalAdditional();
-  fetch(`${API}/api/alert-emails`).then(r=>r.json()).then(d=>{
-    alertCfg=d.config||{}; alertsEnabled = d.alertsEnabled!==false;
-    if(!(alertCfg._additional&&alertCfg._additional.length)) alertCfg._additional=local;
-    renderAlertToggle(); renderAlertTable(); renderAdditionalEmails();
-    if($('alertEmailsNote')) $('alertEmailsNote').textContent=`Recipients loaded · escalation state: count=${Object.keys(d.state&&d.state.counts||{}).length} SBU `;
-    syncAdditionalToServer();
-  }).catch(e=>{
-    alertCfg=alertCfg||{}; if(!(alertCfg._additional&&alertCfg._additional.length)) alertCfg._additional=local;
-    renderAlertToggle(); renderAlertTable(); renderAdditionalEmails();
-    if($('alertEmailsNote')) $('alertEmailsNote').textContent=`Server not reachable (${e.message}) — showing locally saved recipients`;
-  });
-}
-function renderAlertTable(){
-  const tb=$('alertEmailTable').querySelector('tbody'); if(!tb) return;
-  tb.innerHTML='';
-  const order=['accl','apfil','ail','aafl','aelflour','aelmohadevpur','aeldal','hrml','fal','absl','armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz'];
-  for(const k of order){
-    const c=(alertCfg&&alertCfg[k])||{};
-    const ph=(c.plant_head||[]).join(', ')||'—';
-    const hc=(c.hob_ceo||[]).join(', ')||'—';
-    const dep=(alertCfg&&alertCfg._deputy)||'deputy.coo@akijresource.com';
-    const tr=document.createElement('tr');
-    if(alertEditOn){
-      tr.innerHTML=`<td>${c.name||k}</td>
-        <td><input id="ph_${k}" style="width:100%" value="${ph}"></td>
-        <td><input id="hc_${k}" style="width:100%" value="${hc}"></td>
-        <td><input id="dep_${k}" style="width:100%" value="${dep}"></td>`;
-    } else {
-      tr.innerHTML=`<td><b>${c.name||k}</b></td><td>${ph}</td><td>${hc}</td><td>${dep}</td>`;
-    }
-    tb.appendChild(tr);
-  }
-}
-function toggleAlertEdit(){ alertEditOn=!alertEditOn; renderAlertTable(); alertStatus(alertEditOn?'Editing…':'View mode','wait'); }
-function saveAlertEmails(){
-  if(!alertCfg){ alertStatus('No config','err'); return; }
-  const cfg=JSON.parse(JSON.stringify(alertCfg));
-  const split=s=>String(s).split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
-  const order=['accl','apfil','ail','aafl','aelflour','aelmohadevpur','aeldal','hrml','fal','absl','armcl-ngnj','armcl-dhour','armcl-rup','armcl-ctg','armcl-gaz'];
-  for(const k of order){ const e=$('ph_'+k)||$('hc_'+k)||$('dep_'+k); if(!e) continue; cfg[k]=cfg[k]||{}; if($('ph_'+k)) cfg[k].plant_head=split($('ph_'+k).value); if($('hc_'+k)) cfg[k].hob_ceo=split($('hc_'+k).value); cfg._deputy = $('dep_'+k)?$('dep_'+k).value.trim():cfg._deputy; }
-  fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})}).then(r=>r.json()).then(d=>{
-    alertCfg=d.config||cfg; alertEditOn=false; renderAlertTable(); alertStatus('Saved ✔','ok');
-  }).catch(e=>alertStatus('Save failed: '+e.message,'err'));
-}
-function renderAdditionalEmails(){
-  const inp=$('additionalEmails'); if(!inp) return;
-  let add=(alertCfg&&alertCfg._additional)||[];
-  if(!add.length) add=getLocalAdditional();
-  inp.value = (Array.isArray(add)?add:[]).join(', ');
-  if($('additionalEmailsNote')) $('additionalEmailsNote').textContent = add.length ? `${add.length} additional recipient(s)` : 'No additional recipients yet';
-}
-function saveAdditionalEmails(){
-  const split=s=>String(s).split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
-  const add=split($('additionalEmails').value);
-  setLocalAdditional(add);
-  alertCfg=alertCfg||{}; alertCfg._additional=add;
-  renderAdditionalEmails();
-  const cfg=JSON.parse(JSON.stringify(alertCfg)); cfg._additional=add;
-  fetch(`${API}/api/alert-emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:cfg})})
-    .then(r=>r.json()).then(d=>{ alertCfg=d.config||cfg; renderAdditionalEmails(); alertStatus('Additional recipients saved ✔','ok'); })
-    .catch(()=>alertStatus('Additional recipients saved ✔ (stored in this browser; server offline)','ok'));
-}
-function runAlertCheck(){
-  alertStatus('Running alert check — sending emails…','wait');
-  fetch(`${API}/api/alert-check`,{method:'POST'}).then(r=>r.json()).then(d=>{
-    if(d.error) return alertStatus('Error: '+d.error,'err');
-    const s=(d.sent||[]);
-    alertStatus(`Checked · ${s.length} alert(s) escalated: ${s.map(x=>x.key+'→'+x.tier).join(', ')||'none'}`,'ok');
-  }).catch(e=>alertStatus('Failed: '+e.message,'err'));
-}
-function sendTestMail(){
-  alertStatus('Sending test mail to watidmahiya@gmail.com…','wait');
-  fetch(`${API}/api/alert-test`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:'watidmahiya@gmail.com'})}).then(r=>r.json()).then(d=>{
-    if(d.error) return alertStatus('Test mail error: '+d.error,'err');
-    alertStatus(`Test mail sent to ${d.to} — all SBUs · ${d.date} ✔`,'ok');
-  }).catch(e=>alertStatus('Test mail failed: '+e.message,'err'));
-}
 
 function aiInit(){
-  loadAlertEmails();
   $('aiFrom').value = P.meta.maxDate; $('aiTo').value = P.meta.maxDate;
   $('aiFrom').min = P.meta.minDate; $('aiFrom').max = P.meta.maxDate;
   $('aiTo').min = P.meta.minDate; $('aiTo').max = P.meta.maxDate;
-  fetch(`${API}/api/emails`).then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); }).then(d=>{
-    (d.emails||[]).forEach((e,i)=>{ if($('em'+(i+1))) $('em'+(i+1)).value=e; });
-    if((d.emails||[]).length) emStatusMsg(`Loaded ${d.emails.length} saved address(es) ✔`,'ok');
-  }).catch(()=>{
-    const isFile = location.protocol === 'file:';
-    emStatusMsg(isFile
-      ? 'Server not running — open via <b>http://localhost:3212</b> (run <code>node dashboard-server-local.js</code>) — file:// cannot save/send email'
-      : 'Server not running — start <code>node dashboard-server-local.js</code> on port 3212','err');
-    // also check health for diagnostics
-    fetch(`${API}/api/health`).then(r=>r.json()).then(h=>{ if(h && h.tokenExists===false) emStatusMsg('Gmail token missing — run workspace-mcp auth for tahmidulislam@akijresource.com','err'); }).catch(()=>{});
-  });
 }
 function shiftDate(d,n){ const x=new Date(d+'T00:00:00'); x.setDate(x.getDate()+n); return x.toISOString().slice(0,10); }
 function planVsActual(from,to){
@@ -1443,39 +1285,13 @@ function buildReport(p){
   <p style="color:#777;font-size:11px;margin-top:14px">Source: ${p.company} DWH (MES OEE/NPT, production planning, HRMS OT, production costing) · Analysis: built-in analyst engine · ${new Date().toLocaleString()}</p>`;
 }
 function downloadReport(){
-  if(!lastReport){ emStatusMsg('Generate a report first','err'); return; }
+  if(!lastReport){ aiStatus('Generate a report first','err'); return; }
   const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>ACCL Report ${lastReport.from}</title>
   <style>body{font-family:Segoe UI,sans-serif;max-width:900px;margin:20px auto;padding:0 20px;color:#1a2332}h2{color:#0d7d72}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px;font-size:13px}th{background:#eef4f3}</style>
   </head><body><h1>${P.meta.name} — Analysis Report</h1><p>Period: ${lastReport.from} → ${lastReport.to}</p>${lastReport.html}</body></html>`;
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([html],{type:'text/html'}));
   a.download=`Report-${PLANT}-${lastReport.from}_${lastReport.to}.html`; a.click();
-}
-function collectEmails(){
-  const out=[]; for(let i=1;i<=5;i++){ const v=$('em'+i).value.trim(); if(v){ if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){ emStatusMsg(`Invalid email in slot ${i}`,'err'); return null; } out.push(v); } }
-  if(out.length===0){ emStatusMsg('Add at least one email address','err'); return null; }
-  return out;
-}
-function saveEmails(){
-  const list=collectEmails(); if(!list) return;
-  fetch(`${API}/api/emails`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({emails:list})})
-    .then(r=>r.json()).then(d=>{ if(d.error) throw new Error(d.error);
-      emStatusMsg(`Saved ${d.count} address(es) ✔`,'ok'); })
-    .catch(e=>emStatusMsg('Save failed: '+e.message,'err'));
-}
-function sendReport(){
-  if(!lastReport){ emStatusMsg('Generate a report first','err'); return; }
-  const list=collectEmails(); if(!list) return;
-  emStatusMsg('Sending…','wait');
-  fetch(`${API}/api/send`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    to:list, subject:`${P.meta.name} — Analysis Report ${lastReport.from}${lastReport.from!==lastReport.to?' to '+lastReport.to:''}`,
-    html:`<div style="font-family:Segoe UI,Arial,sans-serif;max-width:860px;color:#1a2332">
-      <h2 style="color:#0d7d72;margin-bottom:2px">${P.meta.name} — Performance Analysis</h2>
-      <p style="color:#556;margin-top:0">Period: <b>${lastReport.from}</b> → <b>${lastReport.to}</b> · Generated ${new Date().toLocaleString()}</p>
-      ${lastReport.html}</div>`})})
-    .then(r=>r.json()).then(d=>{ if(d.error) throw new Error(d.error);
-      emStatusMsg(`Sent to ${d.sent_to.join(', ')} ✔`,'ok'); })
-    .catch(e=>emStatusMsg('Send failed: '+e.message,'err'));
 }
 document.addEventListener('DOMContentLoaded', ()=>{ aiInit(); });
 </script>
