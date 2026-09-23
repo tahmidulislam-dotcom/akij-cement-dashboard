@@ -14,4 +14,3 @@ credentials/
 .vercel
 
 ~$*.xlsx
-chat-export.json

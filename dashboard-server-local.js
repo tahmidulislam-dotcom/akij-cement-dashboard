@@ -1,10 +1,10 @@
 /* Akij Cement Dashboard — LOCAL Duplicate with MOH Budget vs Today
-   Serves local duplicate + AI analysis + email + MOH budget/today APIs.
+   Serves local duplicate + AI analysis + MOH budget/today APIs.
    Run:  node dashboard-server-local.js   →  http://localhost:3212            */
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-// Tiny .env loader (no dependency) — reads SMTP_APP_PASSWORD etc. from .env (gitignored)
+// Tiny .env loader (no dependency) — reads vars from .env (gitignored)
 try {
   const envPath = path.join(__dirname, '.env');
   if (fs.existsSync(envPath)) {
@@ -15,40 +15,18 @@ try {
   }
 } catch (e) {}
 const sql = require('mssql');
-const alertEngine = require('./alert-engine.js');
-const { fetchFiveSKaizen, SHEET_CONFIG } = require('./lib/sheets.js');
+const { fetchFiveSKaizen } = require('./lib/sheets.js');
 
-// Attach 5S + Kaizen to every plant (scoped per plant) so they're evaluated against the 70% / 10 targets & shown in reports
-async function attachSheetsToAll(live){
-  try{
-    for (const k of Object.keys(SHEET_CONFIG)) {
-      if (!live.plants || !live.plants[k]) continue;
-      try { const sk = await fetchFiveSKaizen(k); if (sk) { live.plants[k].fiveS=sk.fiveS; live.plants[k].kaizen=sk.kaizen; } } catch(e){}
-    }
-  }catch(e){ console.error('attach sheets failed', e.message); }
-}
 
 const PORT = 3212;
 const DIR = __dirname;
 const DASH = path.join(DIR, 'akij-cement-dashboard-local.html');
-const CFG = path.join(DIR, 'dashboard-config.json');
-const ALERT_CFG = path.join(DIR, 'alert-config.json');
-const ALERT_STATE = path.join(DIR, 'alert-state.json');
-const TOKEN_FILE = path.join(process.env.USERPROFILE || '', '.google_workspace_mcp', 'credentials', (process.env.GOOGLE_EMAIL || 'tahmidulislam@akijresource.com') + '.json');
 
 /* ---------- helpers ---------- */
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify(obj)); };
 const readBody = req => new Promise((ok, err) => { let b = ''; req.on('data', c => b += c); req.on('end', () => { try { ok(b ? JSON.parse(b) : {}); } catch (e) { err(e); } }); req.on('error', err); });
-const loadCfg = () => { try { return JSON.parse(fs.readFileSync(CFG, 'utf8')); } catch { return { emails: [] }; } };
-const saveCfg = c => fs.writeFileSync(CFG, JSON.stringify(c, null, 2));
 const sanitize = h => String(h).replace(/<script[\s\S]*?<\/script>/gi, '').replace(/ on\w+="[^"]*"/gi, '').replace(/javascript:/gi, '');
-const validEmail = e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
 
-/* ---------- Alert email config + daily escalation state ---------- */
-const loadAlertCfg = () => { try { const c = JSON.parse(fs.readFileSync(ALERT_CFG, 'utf8')); if (c.alertsEnabled == null) c.alertsEnabled = true; return c; } catch { const c = JSON.parse(JSON.stringify(alertEngine.defaultConfig)); c.alertsEnabled = true; return c; } };
-const saveAlertCfg = c => fs.writeFileSync(ALERT_CFG, JSON.stringify(c, null, 2));
-const loadAlertState = () => { try { return JSON.parse(fs.readFileSync(ALERT_STATE, 'utf8')); } catch { return { date: '', counts: {} }; } };
-const saveAlertState = s => fs.writeFileSync(ALERT_STATE, JSON.stringify(s, null, 2));
 
 /* ---------- MSSQL for MOH budget/today live fetch ---------- */
 const mssqlConfig = {
@@ -155,98 +133,6 @@ async function computeKpis(key, from, to){
   return out;
 }
 
-/* ---------- Gmail OAuth (stored workspace-mcp token — handles both expiry formats) ---------- */
-let accessToken = null, tokenExp = 0;
-async function getAccessToken() {
-  if (accessToken && Date.now() < tokenExp - 60000) return accessToken;
-  if (!fs.existsSync(TOKEN_FILE)) throw new Error('Gmail token file not found: ' + TOKEN_FILE + ' — run workspace-mcp auth');
-  const tok = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
-  const client_id = tok.client_id || process.env.GOOGLE_OAUTH_CLIENT_ID;
-  const client_secret = tok.client_secret || process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-  const tokenVal = tok.token || tok.access_token || tok.accessToken;
-  const expiryVal = tok.expiry_date || tok.expiry || tok.expiresAt || tok.expires_at;
-  // expiry may be seconds or ms; normalize to ms
-  let expiryMs = null;
-  if (expiryVal != null) {
-    expiryMs = Number(expiryVal) > 1e12 ? Number(expiryVal) : Number(expiryVal) * 1000;
-    // if value looks like seconds since epoch (< 1e12) but > 1e9, treat as seconds
-    if (Number(expiryVal) < 1e12 && Number(expiryVal) > 1e9 && String(expiryVal).length <= 10) expiryMs = Number(expiryVal) * 1000;
-    if (!isNaN(expiryMs) && tokenVal && expiryMs > Date.now() + 60000) { accessToken = tokenVal; tokenExp = expiryMs; return accessToken; }
-  } else if (tokenVal && tok.refresh_token == null) {
-    // token without expiry but no refresh — use it directly once
-    accessToken = tokenVal; tokenExp = Date.now() + 3500*1000; return accessToken;
-  }
-  if (!tok.refresh_token) throw new Error('No refresh_token in stored Gmail credentials — re-auth with workspace-mcp');
-  const r = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id, client_secret, refresh_token: tok.refresh_token, grant_type: 'refresh_token' })
-  });
-  const d = await r.json();
-  if (!d.access_token) throw new Error('Gmail token refresh failed: ' + (d.error_description || d.error || 'unknown'));
-  accessToken = d.access_token; tokenExp = Date.now() + (d.expires_in - 60) * 1000;
-  return accessToken;
-}
-async function gmailSend(to, subject, html) {
-  const at = await getAccessToken();
-  const mime = ['To: ' + to.join(','), 'Content-Type: text/html; charset="UTF-8"',
-    'MIME-Version: 1.0', 'Subject: =?UTF-8?B?' + Buffer.from(subject).toString('base64') + '?=', '', html].join('\r\n');
-  const raw = Buffer.from(mime).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-    method: 'POST', headers: { Authorization: 'Bearer ' + at, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ raw })
-  });
-  const d = await r.json();
-  if (r.status === 401) { accessToken = null; return gmailSend(to, subject, html); }
-  if (!r.ok) throw new Error('Gmail API ' + r.status + ': ' + (d.error && d.error.message || 'send failed'));
-  return d.id;
-}
-
-/* ---------- SMTP sender (App Password @ smtp.gmail.com:465) — used when SMTP_APP_PASSWORD is set ---------- */
-const tls = require('tls');
-function smtpSend(to, subject, html) {
-  const FORBIDDEN = 'tahmidulislam@akijresource.com';
-  let user = process.env.SMTP_EMAIL || process.env.SENDER_EMAIL || 'deputy.coo@akijresource.com';
-  if (String(user).toLowerCase() === FORBIDDEN) user = 'deputy.coo@akijresource.com';   // never send from the developer account
-  const pass = process.env.SMTP_APP_PASSWORD;
-  return new Promise((resolve, reject) => {
-    const sock = tls.connect(465, 'smtp.gmail.com', { servername: 'smtp.gmail.com' }, () => {
-      let buf = '';
-      const mime = ['To: ' + to.join(','), 'From: ' + user, 'Content-Type: text/html; charset="UTF-8"',
-        'MIME-Version: 1.0', 'Subject: =?UTF-8?B?' + Buffer.from(subject).toString('base64') + '?=', '', html].join('\r\n');
-      const cmds = [
-        'EHLO localhost', 'AUTH LOGIN',
-        Buffer.from(user).toString('base64'), Buffer.from(pass).toString('base64'),
-        'MAIL FROM:<' + user + '>',
-        ...to.map(t => 'RCPT TO:<' + t + '>'),
-        'DATA', mime + '\r\n.',
-      ];
-      let i = 0;
-      const step = () => {
-        if (i >= cmds.length) { sock.end(); resolve('sent'); return; }
-        sock.write(cmds[i] + '\r\n'); i++;
-      };
-      sock.on('data', d => {
-        buf += d.toString();
-        if (/^[0-9]{3} /.test(buf.split('\r\n').filter(Boolean).slice(-1)[0] || '')) {
-          const line = buf.split('\r\n').filter(Boolean).slice(-1)[0];
-          const code = parseInt(line.slice(0,3), 10);
-          if (code >= 400) { sock.destroy(); reject(new Error('SMTP ' + line)); return; }
-          if (code === 354) { sock.write(mime + '\r\n.\r\n'); }
-          step();
-        }
-      });
-    });
-    sock.on('error', err => reject(new Error('SMTP conn: ' + err.message)));
-    sock.setTimeout(30000, () => { sock.destroy(); reject(new Error('SMTP timeout')); });
-  });
-}
-async function sendEmail(to, subject, html) {
-  if (process.env.SMTP_APP_PASSWORD) return smtpSend(to, subject, html);
-  // Gmail OAuth fallback — never send from the developer account
-  if ((process.env.GOOGLE_EMAIL || '').toLowerCase() === 'tahmidulislam@akijresource.com')
-    throw new Error('Refusing to send from tahmidulislam@akijresource.com — configure SMTP_EMAIL/SMTP_APP_PASSWORD as the sender');
-  return gmailSend(to, subject, html);
-}
 
 /* ---------- DeepSeek analysis ---------- */
 const SYSTEM_PROMPT = `You are a senior manufacturing performance analyst for Akij Cement Company Ltd. (ACCL Narayanganj plant, Bangladesh — 2 VRM mills, 5 packers, 1 bulk loader).
@@ -289,93 +175,6 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0', 'Pragma': 'no-cache', 'Expires': '0' });
       return fs.createReadStream(DASH).pipe(res);
     }
-    if (url.pathname === '/api/emails' && req.method === 'GET') return json(res, 200, { emails: loadCfg().emails || [] });
-    if (url.pathname === '/api/emails' && req.method === 'POST') {
-      const b = await readBody(req);
-      const list = (b.emails || []).map(e => String(e).trim().toLowerCase()).filter(validEmail);
-      if (list.length === 0) return json(res, 400, { error: 'No valid email addresses' });
-      if (list.length > 5) return json(res, 400, { error: 'Maximum 5 recipients allowed' });
-      if (new Set(list).size !== list.length) return json(res, 400, { error: 'Duplicate addresses' });
-      const cfg = loadCfg(); cfg.emails = list; saveCfg(cfg);
-      return json(res, 200, { ok: true, count: list.length, emails: list });
-    }
-    if (url.pathname === '/api/alert-emails' && req.method === 'GET') {
-      const cfg = loadAlertCfg();
-      const state = loadAlertState();
-      return json(res, 200, { config: cfg, state, deputy: cfg._deputy || 'deputy.coo@akijresource.com', alertsEnabled: cfg.alertsEnabled !== false });
-    }
-    if (url.pathname === '/api/alert-emails' && req.method === 'POST') {
-      const b = await readBody(req);
-      const cfg = loadAlertCfg();
-      const sanitizeList = a => Array.isArray(a) ? a.map(e => String(e).trim().toLowerCase()).filter(validEmail) : [];
-      if (b.config) {
-        for (const [k, v] of Object.entries(b.config)) {
-          if (k === '_deputy') { cfg._deputy = sanitizeList([v])[0] || v || 'deputy.coo@akijresource.com'; continue; }
-          if (k === '_additional') { cfg._additional = sanitizeList(Array.isArray(v) ? v : String(v||'').split(',')); continue; }
-          if (k === 'alertsEnabled') { cfg.alertsEnabled = !!v; continue; }
-          if (typeof v !== 'object' || v === null) continue;
-          cfg[k] = cfg[k] || {};
-          if (v) { if (v.name) cfg[k].name = v.name; if (v.plant_head) cfg[k].plant_head = sanitizeList(v.plant_head); if (v.hob_ceo) cfg[k].hob_ceo = sanitizeList(v.hob_ceo); }
-        }
-      }
-      saveAlertCfg(cfg);
-      return json(res, 200, { ok: true, config: cfg });
-    }
-    if (url.pathname === '/api/alert-check' && req.method === 'POST') {
-      try {
-        const cfg0 = loadAlertCfg();
-        if (cfg0.alertsEnabled === false) return json(res, 200, { disabled: true, msg: 'Alert emails are STOPPED — use Resume to enable' });
-        // Rebuild live DATA (same path as /api/data?live=1) then evaluate + escalate
-        const html = fs.readFileSync(DASH, 'utf8');
-        const m = html.match(/(?:const|let) DATA = (\{[\s\S]*?\});\s*\n?\s*(?:const |let |function |document\.)/);
-        let live = m ? JSON.parse(m[1]) : { plants:{}, order:[] };
-        // reuse the /api/data live-merge by fetching our own endpoint
-        const r = await fetch(`http://localhost:${PORT}/api/data?live=1`);
-        if (r.ok) { const j = await r.json(); if (j && j.plants) live = j; }
-        // attach 5S + Kaizen to EVERY plant so all SBUs are evaluated against the 70% / 10 targets
-        await attachSheetsToAll(live);
-        const cfg = cfg0;
-        const state = loadAlertState();
-        const reslt = await alertEngine.evaluateAll(live, cfg, state, async (to, subject, htmlBody) => { return await sendEmail(to, subject, htmlBody); });
-        saveAlertState(reslt.state);
-        return json(res, 200, reslt);
-      } catch (e) { return json(res, 500, { error: e.message }); }
-    }
-    if (url.pathname === '/api/alert-toggle' && req.method === 'POST') {
-      const b = await readBody(req);
-      const cfg = loadAlertCfg();
-      cfg.alertsEnabled = !!b.enabled;
-      saveAlertCfg(cfg);
-      return json(res, 200, { ok: true, alertsEnabled: cfg.alertsEnabled });
-    }
-    if (url.pathname === '/api/daily-report' && req.method === 'POST') {
-      try {
-        const reportDate = alertEngine.dhakaDate(-1);
-        const r = await fetch(`http://localhost:${PORT}/api/data?live=1&date=${reportDate}`);
-        const live = r.ok ? (await r.json()) : { plants:{} };
-        await attachSheetsToAll(live);
-        const cfg = loadAlertCfg();
-        const out = await alertEngine.sendDailyReport(live, cfg, async (to, subject, htmlBody) => { return await sendEmail(to, subject, htmlBody); }, reportDate);
-        return json(res, 200, out);
-      } catch (e) { return json(res, 500, { error: e.message }); }
-    }
-    if (url.pathname === '/api/alert-test' && req.method === 'POST') {
-      try {
-        const b = await readBody(req);
-        const to = (b && b.to) || 'watidmahiya@gmail.com';
-        const key = (b && b.sbu) || null;   // send only this SBU (e.g. 'accl'), 'ael' for combined AEL, else all
-        const sbu0 = (b && b.sbu) || '';
-        const isAel = sbu0 === 'ael';
-        const focusQ = (sbu0 && !isAel) ? '&focus='+encodeURIComponent(sbu0) : '';
-        const r = await fetch(`http://localhost:${PORT}/api/data?live=1${focusQ}`);
-        const live = r.ok ? (await r.json()) : { plants:{} };
-        if (sbu0 && !isAel) { try{ const sk = await fetchFiveSKaizen(sbu0); if(sk && live.plants && live.plants[sbu0]){ live.plants[sbu0].fiveS=sk.fiveS; live.plants[sbu0].kaizen=sk.kaizen; } }catch(e){} }
-        else await attachSheetsToAll(live);
-        const cfg = loadAlertCfg();
-        const out = await alertEngine.sendTestMail(live, cfg, to, async (t, subject, htmlBody) => { return await sendEmail(t, subject, htmlBody); }, key, b && b.deputy ? 'deputy' : null);
-        return json(res, 200, out);
-      } catch (e) { return json(res, 500, { error: e.message }); }
-    }
     if (url.pathname === '/api/analyze' && req.method === 'POST') {
       const b = await readBody(req);
       if (!b.period || !b.period.from || !b.period.to) return json(res, 400, { error: 'period.from/to required' });
@@ -387,17 +186,6 @@ const server = http.createServer(async (req, res) => {
         if (/401|Authentication|invalid/i.test(e.message)) return json(res, 200, { offline: true, reason: 'API key invalid/expired — using built-in analyst engine' });
         return json(res, 200, { offline: true, reason: e.message + ' — using built-in analyst engine' });
       }
-    }
-    if (url.pathname === '/api/send' && req.method === 'POST') {
-      const b = await readBody(req);
-      // allow client to omit 'to' if they have saved addresses
-      const saved = loadCfg().emails || [];
-      const to = (b.to && b.to.length ? b.to : saved).map(e => String(e).trim().toLowerCase()).filter(validEmail);
-      if (to.length === 0) return json(res, 400, { error: 'No valid recipients — add at least one email and click Save Addresses' });
-      if (to.length > 5) return json(res, 400, { error: 'Maximum 5 recipients allowed' });
-      if (!b.subject || !b.html) return json(res, 400, { error: 'subject and html required' });
-      const id = await sendEmail(to, b.subject, sanitize(b.html));
-      return json(res, 200, { ok: true, message_id: id, sent_to: to });
     }
     if (url.pathname === '/api/moh-budget' && req.method === 'GET') {
       const bu = parseInt(url.searchParams.get('bu') || '0', 10);
@@ -430,13 +218,6 @@ const server = http.createServer(async (req, res) => {
         const r = await pool.request().query(`SELECT SUM(ISNULL(pr.numOverheadCost,0)) as c FROM mes.tblProductionRowArc pr JOIN mes.tblProductionOrderArc po ON po.intProductionOrderId=pr.intProductionOrderId WHERE po.intBusinessUnitId=${bu} AND pr.isActive=1 AND CONVERT(varchar(10), po.dteStartDate, 23)='${d}'`);
         return json(res,200,{ bu, d, actual: Number(r.recordset[0]?.c||0) });
       }catch(e){ return json(res,500,{ error: e.message }); }
-    }
-    if (url.pathname === '/api/health' && req.method === 'GET') {
-      const cfg = loadCfg();
-      const tokenExists = fs.existsSync(TOKEN_FILE);
-      let tokenInfo = null;
-      try{ const t=JSON.parse(fs.readFileSync(TOKEN_FILE,'utf8')); tokenInfo={ has_token: !!t.token, has_refresh: !!t.refresh_token, expiry: t.expiry || t.expiry_date || null }; }catch(e){}
-      return json(res,200,{ ok:true, dashboard: fs.existsSync(DASH), emails: cfg.emails||[], tokenExists, tokenInfo, port:PORT });
     }
     if (url.pathname === '/api/data' && req.method === 'GET') {
       const mergeLive = url.searchParams.get('live')!=='0';
@@ -1110,27 +891,3 @@ async function pushLiveToVercel(){
 setTimeout(pushLiveToVercel, 12*1000);
 setInterval(pushLiveToVercel, 5*60*1000);
 
-/* ---------- Escalation email alert job — daily at 22:00 Dhaka ---------- */
-async function runAlertJob(){
-  try{
-    const dhakaNow = new Date().toLocaleString('en-US',{timeZone:'Asia/Dhaka'});
-    console.log('alert job run', dhakaNow);
-    const r = await fetch(`http://localhost:${PORT}/api/alert-check`, { method:'POST' });
-    const j = await r.json();
-    console.log('alert job result:', JSON.stringify(j.error || { sent: (j.sent||[]).length, alerts: (j.sent||[]).map(s=>s.key) }));
-    // Daily Production Report is now sent from the cloud (Vercel cron -> /api/alert-check GET) so it
-    // no longer depends on this PC being on. Kept here only as a manual/on-demand path via /api/daily-report.
-  }catch(e){ console.error('alert job failed', e.message); }
-}
-function scheduleNextAlert(){
-  const now = new Date();
-  // Dhaka = UTC+6 ; compute current Dhaka hour
-  const dhaka = new Date(now.getTime() + (6*60 - now.getTimezoneOffset())*60000);
-  const next = new Date(dhaka);
-  next.setHours(22, 2, 0, 0);           // 22:02 Dhaka (small buffer)
-  if (next <= dhaka) next.setDate(next.getDate()+1);
-  const ms = next - dhaka;
-  setTimeout(()=>{ runAlertJob(); scheduleNextAlert(); }, ms);
-  console.log(`Alerts scheduled at ${next.toLocaleString('en-US',{timeZone:'Asia/Dhaka'})} (in ${Math.round(ms/60000)} min)`);
-}
-scheduleNextAlert();
