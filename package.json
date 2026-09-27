@@ -1,0 +1,10 @@
+{
+  "name": "oee-machine-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OEE Machine Performance & Loss Summary — Vercel deployment (iBOS DWH, read-only)",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "mssql": "^12.7.0"
+  }
+}

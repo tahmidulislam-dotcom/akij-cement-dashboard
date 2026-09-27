@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OEE Machine Performance &amp; Loss Summary</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#28313d;
+    --txt:#e6edf3; --muted:#94a3b8; --accent:#2dd4bf; --accent2:#38bdf8;
+    --good:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 "Segoe UI",system-ui,-apple-system,sans-serif}
+  a{color:var(--accent2)}
+  header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:16px 20px;background:linear-gradient(90deg,#0f766e22,#0e1116);border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:18px;letter-spacing:.2px}
+  .badge{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:#0b0f14}
+  .spacer{flex:1}
+  .btn{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);color:#05221f;border-color:var(--accent);font-weight:600}
+  .wrap{padding:16px 20px 60px}
+  .filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:16px}
+  .fld{display:flex;flex-direction:column;gap:4px}
+  .fld label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  select,input[type=date]{background:#0b0f14;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:13px;min-width:150px}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
+  .tile{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:14px;padding:14px 16px;position:relative;overflow:hidden}
+  .tile .k{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted)}
+  .tile .v{font-size:26px;font-weight:700;margin-top:6px}
+  .tile .s{font-size:11px;color:var(--muted);margin-top:4px}
+  .tile::after{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--accent)}
+  .tile.bad::after{background:var(--bad)} .tile.warn::after{background:var(--warn)} .tile.good::after{background:var(--good)}
+  .prog{height:7px;border-radius:999px;background:#0b0f14;border:1px solid var(--line);margin-top:9px;overflow:hidden}
+  .prog > span{display:block;height:100%;background:var(--accent);transition:width .3s}
+  .tile.good .prog > span{background:var(--good)} .tile.warn .prog > span{background:var(--warn)} .tile.bad .prog > span{background:var(--bad)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
+  @media(max-width:1000px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+  .card h3{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:600}
+  .chartbox{position:relative;height:280px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap}
+  th,td{padding:8px 9px;border-bottom:1px solid var(--line);text-align:right}
+  th{position:sticky;top:0;background:var(--panel2);color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px;z-index:1}
+  th:nth-child(-n+3),td:nth-child(-n+3){text-align:left}
+  tbody tr:hover{background:#1e2731}
+  .tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:auto;max-height:560px}
+  .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600}
+  .pill.good{background:#0f3d24;color:#4ade80}.pill.warn{background:#463407;color:#fbbf24}.pill.bad{background:#4a1010;color:#f87171}
+  .muted{color:var(--muted)}
+  .note{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.6}
+  .note code{background:#0b0f14;border:1px solid var(--line);border-radius:6px;padding:1px 5px;color:#cbd5e1}
+  .err{background:#4a1010;border:1px solid #7f1d1d;color:#fecaca;border-radius:10px;padding:12px 14px;margin-bottom:14px;display:none;white-space:pre-wrap}
+  .loading{color:var(--muted);padding:40px;text-align:center}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>OEE Machine Performance &amp; Loss Summary</h1>
+  <span class="badge" id="srcBadge">iBOS DWH + Google Sheets · read-only</span>
+  <span class="spacer"></span>
+  <span class="badge" id="genBadge">—</span>
+  <button class="btn" id="refreshBtn">Refresh</button>
+</header>
+
+<div class="wrap">
+  <div class="err" id="errBox"></div>
+
+  <div class="filters">
+    <div class="fld"><label>Business Unit</label><select id="buSel"></select></div>
+    <div class="fld"><label>Plant</label><select id="plantSel"><option value="">All plants</option></select></div>
+    <div class="fld"><label>Machine</label><select id="machSel"><option value="">All machines</option></select></div>
+    <div class="fld"><label>UoM</label><select id="uomSel"><option value="">All UoM</option></select></div>
+    <div class="fld"><label>From</label><input type="date" id="fromInp" /></div>
+    <div class="fld"><label>To</label><input type="date" id="toInp" /></div>
+    <button class="btn primary" id="applyBtn">Apply</button>
+    <button class="btn" data-range="7">Last 7d</button>
+    <button class="btn" data-range="30">Last 30d</button>
+    <button class="btn" data-range="mtd">MTD</button>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="grid2">
+    <div class="card"><h3>OEE trend (A × P × Q)</h3><div class="chartbox"><canvas id="oeeChart"></canvas></div></div>
+    <div class="card"><h3>Capacity utilization &amp; Yield %</h3><div class="chartbox"><canvas id="cuChart"></canvas></div></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><h3>NPT loss distribution (minutes)</h3><div class="chartbox"><canvas id="nptChart"></canvas></div></div>
+    <div class="card"><h3>Top 10 breakdowns (Mechanical / Electrical)</h3><div class="chartbox"><canvas id="bdChart"></canvas></div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>Schedule Maintenance — Close Rate by Business Unit</h3>
+    <div class="grid2" style="margin:0">
+      <div class="chartbox" style="height:260px"><canvas id="schedChart"></canvas></div>
+      <div style="max-height:260px;overflow:auto">
+        <table id="schedTable">
+          <thead><tr><th>BU</th><th>Prefix</th><th>Schedules</th><th>Closed</th><th>Close Rate</th></tr></thead>
+          <tbody id="schedBody"><tr><td colspan="5" class="loading">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="schedNote" style="margin-top:8px;color:var(--muted);font-size:12px"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>Production Plan Variance &amp; Issue Tracking</h3>
+    <div class="tiles" id="pvTiles" style="margin-bottom:12px"></div>
+    <div class="tablewrap" style="max-height:420px">
+      <table id="pvTable">
+        <thead>
+          <tr><th>sl</th><th>Plan Code</th><th>Product</th><th>Planned Qty</th><th>Output Qty</th><th>Difference</th><th>Progress</th><th>Status</th><th>Issue Status</th></tr>
+        </thead>
+        <tbody id="pvBody"><tr><td colspan="9" class="loading">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div id="pvNote" style="margin-top:8px;color:var(--muted);font-size:12px"></div>
+  </div>
+
+  <div class="tablewrap">
+    <table id="machTable">
+      <thead>
+        <tr>
+          <th>sl</th><th>Machine</th><th>UoM</th><th>Capacity</th><th>Target</th><th>Production</th>
+          <th>Achieve %</th><th>Cap Util %</th><th>Good Qty</th><th>Yield %</th><th>Wastage Tgt</th>
+          <th>Actual Wastage</th><th>Wastage %</th><th>OEE %</th><th>NPT %</th><th>Tgt Speed</th>
+          <th>Actual Speed</th><th>Speed Gap</th><th>Planned DT (min)</th><th>Unplanned DT (min)</th><th>MTBF</th><th>MTTR</th>
+        </tr>
+      </thead>
+      <tbody id="machBody"><tr><td colspan="22" class="loading">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <b>Method &amp; source.</b> Live read-only from the iBOS DWH (<code>mes.tblOeeProdWasteHeaderArc</code>,
+    <code>RowArc</code>, <code>tblNPTHeaderArc</code>, <code>RowArc</code>, <code>tblProductionPlanningArc</code>).
+    Formulas follow the OEE dashboard skill: <b>Capacity</b> = Σ(capacity/hr × shift min ÷ 60) ·
+    <b>Yield</b> = Good ÷ Production · <b>Wastage</b> = Σ waste rows ÷ Production ·
+    <b>NPT%</b> = NPT loss minutes (Electrical 456 + Mechanical 457) ÷ Available minutes ·
+    <b>Availability</b> = (Available − NPT) ÷ (Shift − Planned DT) · <b>Performance</b> = SMV × (Production ÷ Available) ·
+    <b>Quality</b> = (Production − Waste) ÷ Production · <b>OEE</b> = A × P × Q × 100 (shown only when inputs are valid,
+    so idle/zero-output rows never display 100%).
+    <b>MTBF</b> = (Shift min ÷ 60) ÷ breakdowns · <b>MTTR</b> = (NPT min ÷ 60) ÷ breakdowns.
+    <span class="muted">Machine OEE tile = average of machines having a valid OEE.</span>
+    When more than one <b>UoM</b> is in view, quantity totals (production/target/capacity) mix units and are not
+    additive — pick a UoM (or a machine) for comparable figures. <b>Wastage Tgt</b> reads the header column which is
+    typically 0 in this data (a known source-field issue).
+    <br><b>5S Score &amp; Kaizen</b> are read live from each SBU's public Google Sheet CSV
+    (<code>lib/sheets.js</code> → <code>SHEET_CONFIG</code>): 5S = average Final Score on the latest date in range
+    (target 70%), Kaizen = IC cards created within the range (target 10). No sheet exists for ARMCL / ABSL / ALEL.
+    <br><b>Schedule Maintenance</b> (per <code>schedule-maintenance-dashboard-guide.md</code>) reads
+    <code>ast.tblPreventiveMaintenanceSchedule</code> via the enterprise-api-gateway, scoped to each BU by the
+    <code>strScheduleNo</code> prefix (<code>PSM-ACCL</code>, <code>PSM-APFIL</code>, …) because the table has no BU column.
+    <b>Close Rate = Closed ÷ Total</b>; “Closed” needs <code>intScheduleMaintenanceStatusId</code>, which the API does not
+    expose yet, so only totals show until the gateway adds it (guide §5). ABSL/ARL have no schedules.
+    <br><b>Production Plan Variance</b> reads <code>mes.tblProductionPlanVarianceIssueArc</code> (DWH, read-only),
+    de-duplicated per <code>strProductionPlanCode</code> (each plan repeats once per logged issue).
+    <b>Difference</b> = output − planned · <b>Progress</b> = output ÷ planned · <b>Variance Flagged</b> = plans running short ·
+    <b>Issues Missing</b> = short plans with no issue logged.
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, dp) => (v == null || v === '' || isNaN(v)) ? '—' : Number(v).toLocaleString(undefined, { minimumFractionDigits: dp ?? 2, maximumFractionDigits: dp ?? 2 });
+const fmt0 = v => (v == null || v === '' || isNaN(v)) ? '—' : Math.round(Number(v)).toLocaleString();
+const pct = v => (v == null || isNaN(v)) ? '—' : Number(v).toFixed(2) + '%';
+let DATA = null;
+const charts = {};
+
+function tilesHtml(t) {
+  const cls = (v, goodAt, warnAt) => v == null ? '' : (v >= goodAt ? 'good' : v >= warnAt ? 'warn' : 'bad');
+  const items = [
+    { k: 'Production OEE', v: pct(t.productionOee), s: t.oeeMachines + ' machine(s) with valid OEE', c: cls(t.productionOee, 65, 45) },
+    { k: 'Capacity Utilization', v: pct(t.capacityUtil), s: 'Target ≥ 80%', c: cls(t.capacityUtil, 80, 60) },
+    { k: 'NPT %', v: pct(t.nptPct), s: 'Loss ÷ available (Mech+Elec)', c: t.nptPct == null ? '' : (t.nptPct <= 5 ? 'good' : t.nptPct <= 10 ? 'warn' : 'bad') },
+    { k: 'Yield', v: pct(t.yieldPct), s: 'Good ÷ production', c: cls(t.yieldPct, 98, 95) },
+    { k: 'Wastage %', v: pct(t.wastagePct), s: 'Actual ' + fmt0(t.actualWastage) + ' · target ' + fmt0(t.wastageTarget), c: t.wastagePct == null ? '' : (t.wastagePct <= 2 ? 'good' : t.wastagePct <= 5 ? 'warn' : 'bad') },
+    { k: 'Actual Production', v: fmt0(t.actualProduction), s: 'Good output = ' + fmt0(t.actualProduction) },
+    { k: 'Production Target', v: fmt0(t.productionTarget), s: 'Achievement ' + pct(t.achievePct), c: cls(t.achievePct, 95, 75) },
+  ];
+  return items.map(i => `<div class="tile ${i.c}"><div class="k">${i.k}</div><div class="v">${i.v}</div><div class="s">${i.s}</div></div>`).join('');
+}
+
+function skTilesHtml(sk) {
+  const reason = (sk && sk.reason) || 'No sheet configured';
+  if (!sk || !sk.available) {
+    return `<div class="tile"><div class="k">5S Score</div><div class="v">—</div><div class="s">${reason}</div></div>
+            <div class="tile"><div class="k">Kaizen (IC cards)</div><div class="v">—</div><div class="s">${reason}</div></div>`;
+  }
+  const f = sk.fiveS || {}, k = sk.kaizen || {};
+  const fv = f.todayValue, kv = (k.count != null ? k.count : k.mtdCount);
+  const ft = (sk.targets && sk.targets.fiveS) || f.target || 70;
+  const kt = (sk.targets && sk.targets.kaizen) || k.target || 10;
+  const fp = fv != null ? Math.min(100, fv / ft * 100) : 0;
+  const kp = kv != null ? Math.min(100, kv / kt * 100) : 0;
+  const fc = fv == null ? '' : (fv >= ft ? 'good' : fv >= ft * 0.85 ? 'warn' : 'bad');
+  const kc = kv == null ? '' : (kv >= kt ? 'good' : kv >= kt * 0.6 ? 'warn' : 'bad');
+  return `<div class="tile ${fc}"><div class="k">5S Score</div>
+      <div class="v">${fv == null ? '—' : Number(fv).toFixed(1) + '%'}</div>
+      <div class="s">Target ${ft}% · latest ${f.latestDate || '—'} · ${f.count || 0} response(s)</div>
+      <div class="prog"><span style="width:${fp.toFixed(0)}%"></span></div></div>
+    <div class="tile ${kc}"><div class="k">Kaizen IC Cards</div>
+      <div class="v">${kv == null ? '—' : kv}</div>
+      <div class="s">Target ${kt} · total ${k.total || 0} card(s) · MTD ${k.mtdCount != null ? k.mtdCount : '—'}</div>
+      <div class="prog"><span style="width:${kp.toFixed(0)}%"></span></div></div>`;
+}
+
+async function loadSK() {
+  const qs = new URLSearchParams({ bu: $('buSel').value, from: $('fromInp').value, to: $('toInp').value });
+  try {
+    const r = await fetch('/api/five-s-kaizen?' + qs.toString(), { cache: 'no-store' });
+    $('tiles').insertAdjacentHTML('beforeend', skTilesHtml(await r.json()));
+  } catch (e) { $('tiles').insertAdjacentHTML('beforeend', skTilesHtml({ available: false, reason: e.message })); }
+}
+
+function maintTileHtml(m) {
+  if (!m || !m.available) {
+    return `<div class="tile"><div class="k">Schedule Close Rate</div><div class="v">—</div><div class="s">${(m && m.reason) || 'No data'}</div></div>`;
+  }
+  const s = m.selected;
+  if (!s || !s.prefix) {
+    return `<div class="tile"><div class="k">Schedule Close Rate</div><div class="v">0 / 0</div><div class="s">No schedule records for this BU</div></div>`;
+  }
+  const total = s.total, closed = s.closed;
+  const rate = total > 0 ? closed / total * 100 : null;
+  const cls = rate == null ? '' : (rate >= 95 ? 'good' : rate >= 80 ? 'warn' : 'bad');
+  const prog = rate == null ? 0 : Math.min(100, Math.max(0, rate));
+  return `<div class="tile ${cls}"><div class="k">Schedule Close Rate · ${s.code}</div>
+      <div class="v">${rate == null ? '—' : Number(rate).toFixed(1) + '%'}</div>
+      <div class="s">${closed} / ${total} closed · ${s.prefix}</div>
+      <div class="prog"><span style="width:${prog.toFixed(0)}%"></span></div></div>`;
+}
+
+let SCHED = null, schedChartObj = null;
+function renderSchedule(m) {
+  SCHED = m;
+  const body = $('schedBody'); if (!body) return;
+  const note = $('schedNote');
+  if (!m || !m.available) {
+    body.innerHTML = `<tr><td colspan="5" class="muted">${(m && m.reason) || 'No data'}</td></tr>`;
+    if (note) note.textContent = '';
+    return;
+  }
+  const rows = m.summary || [];
+  body.innerHTML = rows.map(x => {
+    const rate = x.total > 0 ? (x.closed / x.total * 100) : null;
+    return `<tr><td>${x.code}</td><td>${x.prefix || '—'}</td><td>${x.total}</td><td>${x.total ? x.closed : '—'}</td>
+      <td>${rate == null ? '—' : rate.toFixed(2) + '%'}</td></tr>`;
+  }).join('');
+  if (note) note.innerHTML = 'Closed = ' + (m.closedBasis || '') + '. Scanned ' + (m.rowsScanned || 0) + ' schedule rows · ' + (m.source || '');
+  if (typeof Chart !== 'undefined') {
+    try { if (schedChartObj) schedChartObj.destroy(); } catch (e) {}
+    schedChartObj = new Chart($('schedChart'), { type: 'bar',
+      data: { labels: rows.map(x => x.code), datasets: [{ label: 'Schedules', data: rows.map(x => x.total), backgroundColor: '#38bdf8' }] },
+      options: { ...baseOpts(), plugins: { legend: { display: false } } } });
+  }
+}
+
+async function loadMaintenance() {
+  const qs = new URLSearchParams({ bu: $('buSel').value });
+  try {
+    const r = await fetch('/api/schedule-maintenance?' + qs.toString(), { cache: 'no-store' });
+    const j = await r.json();
+    $('tiles').insertAdjacentHTML('beforeend', maintTileHtml(j));
+    renderSchedule(j);
+  } catch (e) {
+    $('tiles').insertAdjacentHTML('beforeend', maintTileHtml({ available: false, reason: e.message }));
+    renderSchedule({ available: false, reason: e.message });
+  }
+}
+
+/* ---------- Production Plan Variance & Issue Tracking ---------- */
+const pvCls = (v, good, warn) => (v == null) ? '' : (v >= good ? 'good' : v >= warn ? 'warn' : 'bad');
+
+function pvTilesHtml(t) {
+  if (!t) return '';
+  const items = [
+    { k: 'Plan Lines', v: t.planLines, s: 'work orders in window' },
+    { k: 'On Target', v: t.onTarget, s: 'output \u2265 planned', c: t.onTarget > 0 ? 'good' : '' },
+    { k: 'Variance Flagged', v: t.varianceFlagged, s: 'output < planned', c: t.varianceFlagged > 0 ? 'bad' : '' },
+    { k: 'Issues Missing', v: t.issuesMissing, s: 'flagged, no issue logged', c: t.issuesMissing > 0 ? 'warn' : '' },
+    { k: 'Difference', v: fmt0(t.differenceTotal), s: 'output \u2212 planned', c: t.differenceTotal < 0 ? 'bad' : '' },
+  ];
+  return items.map(i => `<div class="tile ${i.c || ''}"><div class="k">${i.k}</div><div class="v">${i.v}</div><div class="s">${i.s}</div></div>`).join('');
+}
+
+function renderPlanVariance(m) {
+  const body = $('pvBody'); if (!body) return;
+  const note = $('pvNote');
+  const tiles = $('pvTiles');
+  if (tiles) tiles.innerHTML = (m && m.available !== false) ? pvTilesHtml(m.tiles) : '';
+  if (!m || m.available === false) {
+    body.innerHTML = `<tr><td colspan="9" class="muted">${(m && (m.reason || m.error)) || 'No data'}</td></tr>`;
+    if (note) note.textContent = '';
+    return;
+  }
+  const rows = m.lines || [];
+  body.innerHTML = rows.length ? rows.map((x, i) => {
+    const pc = x.difference < 0 ? 'bad' : x.difference > 0 ? 'warn' : 'good';
+    return `<tr>
+      <td>${i + 1}</td><td>${x.planCode || '—'}</td><td>${x.product || '—'}</td>
+      <td>${fmt0(x.planned)}</td><td>${fmt0(x.output)}</td>
+      <td><span class="pill ${pc}">${fmt0(x.difference)}</span></td>
+      <td>${pillPct(x.progressPct, 95, 75)}</td>
+      <td>${x.status || '—'}</td>
+      <td>${x.issueStatus || (x.hasIssue ? 'Logged' : '—')}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="9" class="loading">No production-plan variance rows for this filter / window.</td></tr>';
+  if (note) note.innerHTML = 'De-duplicated per plan code · ' + (m.source || '') + ' · window ' + (m.filters ? (m.filters.from + ' \u2192 ' + m.filters.to) : '');
+}
+
+function planTileHtml(t) {
+  if (!t) return '';
+  const v = t.achievePct;
+  const cls = v == null ? '' : (v >= 95 ? 'good' : v >= 75 ? 'warn' : 'bad');
+  const prog = v == null ? 0 : Math.min(100, Math.max(0, v));
+  return `<div class="tile ${cls}"><div class="k">Planning Achievement</div>
+      <div class="v">${pct(v)}</div>
+      <div class="s">${fmt0(t.outputTotal)} / ${fmt0(t.plannedTotal)}</div>
+      <div class="prog"><span style="width:${prog.toFixed(0)}%"></span></div></div>`;
+}
+
+async function loadPlanVariance() {
+  const qs = new URLSearchParams({ bu: $('buSel').value, from: $('fromInp').value, to: $('toInp').value });
+  if ($('plantSel').value) qs.set('plantId', $('plantSel').value);
+  try {
+    const r = await fetch('/api/plan-variance?' + qs.toString(), { cache: 'no-store' });
+    const j = await r.json();
+    renderPlanVariance(j);
+    const tiles = $('tiles');
+    if (tiles && j && j.available !== false) tiles.insertAdjacentHTML('beforeend', planTileHtml(j.tiles));
+  } catch (e) { renderPlanVariance({ available: false, reason: e.message }); }
+}
+
+function pillPct(v, good, warn) {
+  if (v == null) return '<span class="muted">—</span>';
+  const c = v >= good ? 'good' : v >= warn ? 'warn' : 'bad';
+  return `<span class="pill ${c}">${Number(v).toFixed(2)}%</span>`;
+}
+
+function rowHtml(m) {
+  return `<tr>
+    <td>${m.sl}</td><td>${m.machineName || '—'}</td><td>${m.uom || '—'}</td>
+    <td>${fmt(m.capacity)}</td><td>${fmt(m.target)}</td><td>${fmt(m.production)}</td>
+    <td>${pillPct(m.achievePct, 95, 75)}</td><td>${pillPct(m.capUtilPct, 80, 60)}</td>
+    <td>${fmt(m.good)}</td><td>${pillPct(m.yieldPct, 98, 95)}</td>
+    <td>${fmt(m.wasteTarget)}</td><td>${fmt(m.actualWastage)}</td><td>${pillPctReverse(m.wastagePct, 2, 5)}</td>
+    <td>${pillPct(m.oeePct, 65, 45)}</td><td>${pillPctReverse(m.nptPct, 5, 10)}</td>
+    <td>${fmt(m.tgtSpeed)}</td><td>${fmt(m.actSpeed)}</td><td>${fmt(m.speedGap)}</td>
+    <td>${fmt(m.plannedDtMin)}</td><td>${fmt(m.unplannedDtMin)}</td>
+    <td>${fmt(m.mtbf)}</td><td>${fmt(m.mttr)}</td>
+  </tr>`;
+}
+function pillPctReverse(v, good, warn) {
+  if (v == null) return '<span class="muted">—</span>';
+  const c = v <= good ? 'good' : v <= warn ? 'warn' : 'bad';
+  return `<span class="pill ${c}">${Number(v).toFixed(2)}%</span>`;
+}
+
+const C = { grid: '#28313d', tick: '#94a3b8' };
+function baseOpts(){ return { responsive:true, maintainAspectRatio:false, animation:false,
+  plugins:{ legend:{ labels:{ color:C.tick, boxWidth:12 } } },
+  scales:{ x:{ ticks:{ color:C.tick, maxRotation:0, autoSkip:true }, grid:{ color:C.grid } },
+           y:{ ticks:{ color:C.tick }, grid:{ color:C.grid } } } }; }
+
+function drawCharts() {
+  if (typeof Chart === 'undefined') return;
+  Object.values(charts).forEach(c => { try { c.destroy(); } catch(e){} });
+  const days = DATA.daily.map(d => d.d);
+  charts.oee = new Chart($('oeeChart'), { type:'line',
+    data:{ labels:days, datasets:[
+      { label:'OEE %', data:DATA.daily.map(d=>d.oeePct), borderColor:'#2dd4bf', backgroundColor:'#2dd4bf22', fill:true, tension:.3, spanGaps:true },
+      { label:'Availability', data:DATA.daily.map(d=>d.availability==null?null:d.availability*100), borderColor:'#38bdf8', tension:.3, spanGaps:true },
+      { label:'Performance', data:DATA.daily.map(d=>d.performance==null?null:d.performance*100), borderColor:'#f59e0b', tension:.3, spanGaps:true },
+      { label:'Quality', data:DATA.daily.map(d=>d.quality==null?null:d.quality*100), borderColor:'#a78bfa', tension:.3, spanGaps:true },
+    ]}, options: baseOpts() });
+
+  charts.cu = new Chart($('cuChart'), { type:'line',
+    data:{ labels:days, datasets:[
+      { label:'Capacity Util %', data:DATA.daily.map(d=>d.capUtilPct), borderColor:'#38bdf8', tension:.3, spanGaps:true },
+      { label:'Yield %', data:DATA.daily.map(d=>d.yieldPct), borderColor:'#22c55e', tension:.3, spanGaps:true },
+    ]}, options: baseOpts() });
+
+  const npt = DATA.nptDistribution.slice(0, 10);
+  const palette = ['#2dd4bf','#38bdf8','#f59e0b','#ef4444','#a78bfa','#22c55e','#f472b6','#facc15','#60a5fa','#fb923c'];
+  charts.npt = new Chart($('nptChart'), { type:'doughnut',
+    data:{ labels:npt.map(x=>x.category), datasets:[{ data:npt.map(x=>x.minutes), backgroundColor:palette, borderColor:'#161b22', borderWidth:2 }] },
+    options:{ responsive:true, maintainAspectRatio:false, animation:false, plugins:{ legend:{ position:'right', labels:{ color:C.tick, boxWidth:12 } } } } });
+
+  const bd = DATA.topBreakdowns.slice(0, 10).reverse();
+  charts.bd = new Chart($('bdChart'), { type:'bar',
+    data:{ labels:bd.map(x=>x.item), datasets:[{ label:'Loss minutes', data:bd.map(x=>x.minutes), backgroundColor:'#f59e0b' }] },
+    options:{ ...baseOpts(), indexAxis:'y' } });
+}
+
+function fillSelects(data) {
+  const plantSel = $('plantSel'), machSel = $('machSel'), uomSel = $('uomSel');
+  const curP = plantSel.value, curM = machSel.value, curU = uomSel.value;
+  plantSel.innerHTML = '<option value="">All plants</option>' + (data.plants||[]).map(p=>`<option value="${p.plantId}">${p.plantName} (${p.machines})</option>`).join('');
+  machSel.innerHTML = '<option value="">All machines</option>' + (data.machineList||[]).map(m=>`<option value="${m.machineId}">${m.machineName}</option>`).join('');
+  uomSel.innerHTML = '<option value="">All UoM</option>' + (data.uomList||[]).map(u=>`<option value="${u}">${u}</option>`).join('');
+  if ([...plantSel.options].some(o=>o.value===curP)) plantSel.value = curP;
+  if ([...machSel.options].some(o=>o.value===curM)) machSel.value = curM;
+  if ([...uomSel.options].some(o=>o.value===curU)) uomSel.value = curU;
+}
+
+async function load() {
+  const bu = $('buSel').value;
+  const qs = new URLSearchParams({ bu, from:$('fromInp').value, to:$('toInp').value });
+  if ($('plantSel').value) qs.set('plantId', $('plantSel').value);
+  if ($('machSel').value) qs.set('machineId', $('machSel').value);
+  if ($('uomSel').value) qs.set('uom', $('uomSel').value);
+  $('errBox').style.display = 'none';
+  document.querySelectorAll('.chartbox').forEach(b=>{ if(!b.querySelector('canvas')) b.innerHTML=''; });
+  try {
+    const r = await fetch('/api/oee?' + qs.toString(), { cache:'no-store' });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    DATA = j;
+    $('genBadge').textContent = 'Updated ' + new Date(j.generated).toLocaleString();
+    $('tiles').innerHTML = tilesHtml(j.tiles);
+    $('machBody').innerHTML = j.machines.length ? j.machines.map(rowHtml).join('') : '<tr><td colspan="22" class="loading">No OEE rows for this filter / date range.</td></tr>';
+    fillSelects(j);
+    drawCharts();
+    loadSK();
+    loadMaintenance();
+    loadPlanVariance();
+  } catch (e) {
+    $('errBox').style.display = 'block';
+    $('errBox').textContent = 'Could not load data: ' + e.message;
+    $('machBody').innerHTML = '<tr><td colspan="22" class="loading">—</td></tr>';
+    renderPlanVariance({ available: false, reason: e.message });
+  }
+}
+
+async function boot() {
+  try {
+    const r = await fetch('/api/business-units');
+    const j = await r.json();
+    $('buSel').innerHTML = (j.businessUnits||[]).map(b=>`<option value="${b.id}">${b.code} — ${b.name}</option>`).join('');
+    $('buSel').value = '4';
+  } catch(e) { $('buSel').innerHTML = '<option value="4">ACCL</option>'; }
+  const t = new Date(), to = t.toISOString().slice(0,10);
+  const from = new Date(t.getTime()-6*864e5).toISOString().slice(0,10);
+  $('toInp').value = to; $('fromInp').value = from;
+  await load();
+}
+
+$('applyBtn').onclick = () => load();
+$('refreshBtn').onclick = () => load();
+$('buSel').onchange = () => { $('plantSel').value=''; $('machSel').value=''; $('uomSel').value=''; load(); };
+$('plantSel').onchange = () => { $('machSel').value=''; load(); };
+$('machSel').onchange = () => load();
+$('uomSel').onchange = () => load();
+document.querySelectorAll('[data-range]').forEach(b => b.onclick = () => {
+  const t = new Date(), to = t.toISOString().slice(0,10); let from;
+  const r = b.dataset.range;
+  if (r === 'mtd') from = t.toISOString().slice(0,7) + '-01';
+  else from = new Date(t.getTime() - (parseInt(r,10)-1) * 864e5).toISOString().slice(0,10);
+  $('toInp').value = to; $('fromInp').value = from; load();
+});
+boot();
+</script>
+</body>
+</html>
