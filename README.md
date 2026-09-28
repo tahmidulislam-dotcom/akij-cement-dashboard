@@ -4,25 +4,33 @@ Live, read-only machine-performance dashboard for Akij Group plants, hosted on V
 
 - **Frontend:** `index.html` (self-contained; Chart.js from CDN)
 - **Backend:** Vercel serverless functions in `api/` (Node.js)
-- **Data:** iBOS DWH (SQL Server) `mes.*Arc` mirror tables, read-only via `mssql`
+- **Data:** iBOS ERP via the **enterprise-api-gateway** MCP (`execute_readonly_query` → iBOSDDD, read-only)
 
 ## Endpoints
 
 | Path | Purpose |
 |---|---|
 | `GET /api/business-units` | BU dropdown list |
-| `GET /api/health` | DB connectivity check |
+| `GET /api/health` | Gateway connectivity check |
 | `GET /api/oee?bu=&from=&to=&plantId=&machineId=&uom=` | OEE / capacity / yield / NPT / waste machine rows + tiles + charts |
-| `GET /api/plan-variance?bu=&from=&to=&plantId=` | Production Plan Variance & Issue Tracking (`mes.tblProductionPlanVarianceIssueArc`) |
-| `GET /api/schedule-maintenance?bu=` | Schedule Maintenance close rate (via enterprise-api-gateway) |
+| `GET /api/plan-variance?bu=&from=&to=&plantId=` | Production Plan Variance & Issue Tracking (`mes.tblProductionPlanVarianceIssue`) |
+| `GET /api/schedule-maintenance?bu=` | Schedule Maintenance close rate (registered asset API) |
 | `GET /api/five-s-kaizen?bu=&from=&to=` | 5S score & Kaizen counts (Google Sheets) |
+
+## Why the gateway?
+
+A direct MSSQL connection to the DWH is firewalled from Vercel's egress IPs. The
+`enterprise-api-gateway` is on the public internet and reaches the ERP database, so all
+SQL is executed through its `execute_readonly_query` tool.
+
+> The gateway only permits statements that begin with `SELECT` (no CTEs / `WITH`), so
+> aggregation is written as a subquery in `FROM`.
 
 ## Environment variables
 
 | Var | Required | Notes |
 |---|---|---|
-| `MSSQL_SERVER` / `MSSQL_PORT` / `MSSQL_USER` / `MSSQL_PASSWORD` / `MSSQL_DATABASE` | yes | DWH connection (read-only). Defaults exist but should be set in Vercel. |
-| `ERP_GATEWAY_TOKEN` | for schedule-maintenance | Bearer token for `enterprise-api-gateway.opsh.io` |
+| `ERP_GATEWAY_TOKEN` | yes | Bearer token for `enterprise-api-gateway.opsh.io` |
 | `ERP_GATEWAY_URL` | no | default `https://enterprise-api-gateway.opsh.io` |
 
 ## Deploy
@@ -30,5 +38,3 @@ Live, read-only machine-performance dashboard for Akij Group plants, hosted on V
 ```
 npx vercel --prod
 ```
-
-> The DWH firewall must allow Vercel egress IPs for live data.
