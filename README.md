@@ -1,4 +1,4 @@
-# OEE Machine Performance & Loss Summary
+# Deputy COO Control Tower
 
 Live, read-only machine-performance dashboard for Akij Group plants, hosted on Vercel.
 
