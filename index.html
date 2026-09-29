@@ -89,9 +89,9 @@
     <div class="card"><h3>Capacity utilization &amp; Yield %</h3><div class="chartbox"><canvas id="cuChart"></canvas></div></div>
   </div>
 
-  <div class="grid2">
-    <div class="card"><h3>MOH — Daily overhead cost</h3><div class="chartbox"><canvas id="mohTrendChart"></canvas></div></div>
-    <div class="card"><h3>MOH — by plant</h3><div class="chartbox"><canvas id="mohPlantChart"></canvas></div></div>
+  <div class="card" style="margin-bottom:16px">
+    <h3>MOH — Daily manufacturing overhead (GL 4010001)</h3>
+    <div class="chartbox" style="height:240px"><canvas id="mohTrendChart"></canvas></div>
   </div>
 
   <div class="grid2">
@@ -410,16 +410,8 @@ function drawMOHCharts(m) {
   const moh = m.daily.map(x => x.moh);
   if (charts.mohTrend) { try { charts.mohTrend.destroy(); } catch (e) {} }
   charts.mohTrend = new Chart($('mohTrendChart'), { type: 'bar',
-    data: { labels: days, datasets: [{ label: 'MOH cost', data: moh, backgroundColor: '#f97316' }] },
+    data: { labels: days, datasets: [{ label: 'Net MOH', data: moh, backgroundColor: '#f97316' }] },
     options: { ...baseOpts(), plugins: { legend: { display: false } } } });
-
-  const plantMap = {};
-  for (const x of m.daily) { const k = x.plantName || ('Plant ' + x.plantId); plantMap[k] = (plantMap[k] || 0) + x.moh; }
-  const pLabels = Object.keys(plantMap), pVals = pLabels.map(k => plantMap[k]);
-  if (charts.mohPlant) { try { charts.mohPlant.destroy(); } catch (e) {} }
-  charts.mohPlant = new Chart($('mohPlantChart'), { type: 'bar',
-    data: { labels: pLabels, datasets: [{ label: 'MOH cost', data: pVals, backgroundColor: '#ef4444' }] },
-    options: { ...baseOpts(), indexAxis: 'y', plugins: { legend: { display: false } } } });
 }
 
 function drawCharts() {
