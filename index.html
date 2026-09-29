@@ -208,20 +208,20 @@ function skTilesHtml(sk) {
             <div class="tile"><div class="k">Kaizen (IC cards)</div><div class="v">—</div><div class="s">${reason}</div></div>`;
   }
   const f = sk.fiveS || {}, k = sk.kaizen || {};
-  const fv = f.todayValue, kv = (k.count != null ? k.count : k.mtdCount);
+  const fv = f.todayValue, total = k.total, mtd = (k.mtd != null ? k.mtd : (k.mtdCount != null ? k.mtdCount : k.count));
   const ft = (sk.targets && sk.targets.fiveS) || f.target || 70;
   const kt = (sk.targets && sk.targets.kaizen) || k.target || 10;
   const fp = fv != null ? Math.min(100, fv / ft * 100) : 0;
-  const kp = kv != null ? Math.min(100, kv / kt * 100) : 0;
+  const kp = mtd != null ? Math.min(100, mtd / kt * 100) : 0;
   const fc = fv == null ? '' : (fv >= ft ? 'good' : fv >= ft * 0.85 ? 'warn' : 'bad');
-  const kc = kv == null ? '' : (kv >= kt ? 'good' : kv >= kt * 0.6 ? 'warn' : 'bad');
+  const kc = mtd == null ? '' : (mtd >= kt ? 'good' : mtd >= kt * 0.6 ? 'warn' : 'bad');
   return `<div class="tile ${fc}"><div class="k">5S Score</div>
       <div class="v">${fv == null ? '—' : Number(fv).toFixed(1) + '%'}</div>
       <div class="s">Target ${ft}% · latest ${f.latestDate || '—'} · ${f.count || 0} response(s)</div>
       <div class="prog"><span style="width:${fp.toFixed(0)}%"></span></div></div>
     <div class="tile ${kc}"><div class="k">Kaizen IC Cards</div>
-      <div class="v">${kv == null ? '—' : kv}</div>
-      <div class="s">Target ${kt} · total ${k.total || 0} card(s) · MTD ${k.mtdCount != null ? k.mtdCount : '—'}</div>
+      <div class="v">${mtd == null ? '—' : mtd}</div>
+      <div class="s">Target ${kt} · total ${total != null ? total : 0} cards</div>
       <div class="prog"><span style="width:${kp.toFixed(0)}%"></span></div></div>`;
 }
 
