@@ -179,6 +179,11 @@ let DATA = null;
 let LOAD_GEN = 0;
 const charts = {};
 
+function uomBreakdown(label, list) {
+  if (!list || !list.length) return label + ' = —';
+  return label + ' = ' + list.map(x => x.uom + ' (' + fmt0(x.qty) + ')').join(' + ');
+}
+
 function tilesHtml(t) {
   const cls = (v, goodAt, warnAt) => v == null ? '' : (v >= goodAt ? 'good' : v >= warnAt ? 'warn' : 'bad');
   const items = [
@@ -187,8 +192,8 @@ function tilesHtml(t) {
     { k: 'NPT %', v: pct(t.nptPct), s: 'Loss ÷ available (Mech+Elec)', c: t.nptPct == null ? '' : (t.nptPct <= 5 ? 'good' : t.nptPct <= 10 ? 'warn' : 'bad') },
     { k: 'Yield', v: pct(t.yieldPct), s: 'Good ÷ production', c: cls(t.yieldPct, 98, 95) },
     { k: 'Wastage %', v: pct(t.wastagePct), s: 'Actual ' + fmt0(t.actualWastage) + ' · target ' + fmt0(t.wastageTarget), c: t.wastagePct == null ? '' : (t.wastagePct <= 2 ? 'good' : t.wastagePct <= 5 ? 'warn' : 'bad') },
-    { k: 'Actual Production', v: fmt0(t.actualProduction), s: 'Good output = ' + fmt0(t.actualProduction) },
-    { k: 'Production Target', v: fmt0(t.productionTarget), s: 'Achievement ' + pct(t.achievePct), c: cls(t.achievePct, 95, 75) },
+    { k: 'Actual Production', v: fmt0(t.goodOutput != null ? t.goodOutput : t.actualProduction), s: uomBreakdown('Good output', t.goodByUom) },
+    { k: 'Production Target', v: fmt0(t.productionTarget), s: uomBreakdown('Target', t.targetByUom) + ' · Achievement ' + pct(t.achievePct), c: cls(t.achievePct, 95, 75) },
   ];
   return items.map(i => `<div class="tile ${i.c}"><div class="k">${i.k}</div><div class="v">${i.v}</div><div class="s">${i.s}</div></div>`).join('');
 }
